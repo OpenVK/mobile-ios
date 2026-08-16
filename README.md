@@ -5,7 +5,7 @@ Author: [Nika Falaleeva](https://github.com/nikanikoo)
 Native mobile client for iOS built with SwiftUI.\
 _Powered by OpenVK API. iOS 15.0+ supported._
 
-We will be happy to accept your bugreports [in our bug-tracker](https://github.com/openvk/projects/5).
+We will be happy to accept your bugreports [in our bug-tracker](https://github.com/orgs/OpenVK/projects/5).
 
 > [!WARNING]
 > OpenVK it is fan project, not affiliated in any way with VKontakte and it's company VK LLC. Below is the same message in Russian. \
