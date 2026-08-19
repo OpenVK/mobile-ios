@@ -24,6 +24,8 @@ struct PostCard: View {
     @State private var selectedRepostPost: Post? = nil
     @State private var showRepostSheet = false
     @State private var isExplicitRevealed = false
+    @State private var isTextExpanded = false
+    @State private var isRepostTextExpanded = false
     @Binding var selectedMedia: Attachment?
     @Binding var owningPost: Post?
     
@@ -77,11 +79,33 @@ struct PostCard: View {
                             .buttonStyle(PlainButtonStyle())
 
                             if !repostedPost.text.isEmpty {
-                                Text(repostedPost.text)
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.primary)
-                                    .lineSpacing(3)
-                                    .multilineTextAlignment(.leading)
+                                let isLongRepost = repostedPost.text.count > 250 || repostedPost.text.components(separatedBy: "\n").count > 5
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(repostedPost.text)
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.primary)
+                                        .lineSpacing(3)
+                                        .lineLimit(isRepostTextExpanded ? nil : 6)
+                                        .multilineTextAlignment(.leading)
+
+                                    if isLongRepost {
+                                        Text(isRepostTextExpanded ? "Свернуть" : "Показать полностью...")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(.appAccent)
+                                            .padding(.top, 2)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if isLongRepost {
+                                        HapticManager.impact(.light)
+                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                            isRepostTextExpanded.toggle()
+                                        }
+                                    } else if !post.isExplicit || isExplicitRevealed {
+                                        selectedRepostPost = repostedPost
+                                    }
+                                }
                             }
 
                             if !repostedPost.attachments.isEmpty {
@@ -463,14 +487,49 @@ struct PostCard: View {
         .contentShape(Rectangle())
     }
 
+    private var isLongText: Bool {
+        post.text.count > 250 || post.text.components(separatedBy: "\n").count > 5
+    }
+
     private var text: some View {
-        Text(post.text)
-            .font(.system(size: 15))
-            .foregroundColor(.primary)
-            .lineSpacing(4)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 10)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(post.text)
+                .font(.system(size: 15))
+                .foregroundColor(.primary)
+                .lineSpacing(4)
+                .lineLimit(isTextExpanded ? nil : 6)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if isLongText {
+                        HapticManager.impact(.light)
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            isTextExpanded.toggle()
+                        }
+                    }
+                }
+
+            if isLongText {
+                Button(action: {
+                    HapticManager.impact(.light)
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        isTextExpanded.toggle()
+                    }
+                }) {
+                    Text(isTextExpanded ? "Свернуть" : "Показать полностью...")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.appAccent)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+        .zIndex(1)
     }
 
     private var imagePlaceholder: some View {
