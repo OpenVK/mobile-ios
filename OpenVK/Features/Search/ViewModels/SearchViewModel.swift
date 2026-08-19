@@ -36,8 +36,8 @@ enum SearchCategory: String, CaseIterable, Identifiable {
 
 enum UserSortOption: Int, CaseIterable, Identifiable {
     case popular = 4
-    case newest = 1
-    case oldest = 0
+    case newest = 0
+    case oldest = 1
 
     var id: Int { rawValue }
     var title: String {
@@ -167,13 +167,20 @@ final class SearchViewModel: ObservableObject {
     }
     
     @Published private(set) var isLoading: Bool = false
+    @Published private(set) var isLoadingMore: Bool = false
     @Published private(set) var allResults: SearchAllResults = SearchAllResults()
     @Published private(set) var users: [User] = []
+    @Published private(set) var totalUsersCount: Int = 0
     @Published private(set) var groups: [Community] = []
+    @Published private(set) var totalGroupsCount: Int = 0
     @Published private(set) var posts: [Post] = []
+    @Published private(set) var postsNextFrom: String? = nil
     @Published private(set) var videos: [Video] = []
+    @Published private(set) var totalVideosCount: Int = 0
     @Published private(set) var audios: [AudioTrack] = []
+    @Published private(set) var totalAudiosCount: Int = 0
     @Published private(set) var documents: [AppDocument] = []
+    @Published private(set) var totalDocumentsCount: Int = 0
     @Published var errorMessage: String? = nil
 
     private let service: SearchServiceProtocol
@@ -202,6 +209,26 @@ final class SearchViewModel: ObservableObject {
             return audios.isEmpty
         case .documents:
             return documents.isEmpty
+        }
+    }
+
+    var canLoadMore: Bool {
+        guard !isLoading && !isLoadingMore else { return false }
+        switch selectedCategory {
+        case .all:
+            return false
+        case .users:
+            return totalUsersCount > 0 && users.count < totalUsersCount
+        case .groups:
+            return totalGroupsCount > 0 && groups.count < totalGroupsCount
+        case .posts:
+            return postsNextFrom != nil && !(postsNextFrom?.isEmpty ?? true)
+        case .videos:
+            return totalVideosCount > 0 && videos.count < totalVideosCount
+        case .audios:
+            return totalAudiosCount > 0 && audios.count < totalAudiosCount
+        case .documents:
+            return totalDocumentsCount > 0 && documents.count < totalDocumentsCount
         }
     }
 
@@ -260,6 +287,7 @@ final class SearchViewModel: ObservableObject {
 
         switch selectedCategory {
         case .all:
+            allResults = SearchAllResults()
             service.searchAll(query: currentQuery) { [weak self] results in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
@@ -268,51 +296,183 @@ final class SearchViewModel: ObservableObject {
                 }
             }
         case .users:
+            users = []
             service.searchUsers(
                 query: currentQuery,
                 sort: userSort.rawValue,
                 onlyOnline: userOnlyOnline,
                 offset: 0,
-                count: 40
-            ) { [weak self] fetched in
+                count: 30
+            ) { [weak self] fetched, total in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     self.users = fetched
+                    self.totalUsersCount = total
                     self.isLoading = false
+                }
+            }
+        case .groups:
+            groups = []
+            service.searchGroups(
+                query: currentQuery,
+                sort: groupSort.rawValue,
+                offset: 0,
+                count: 30
+            ) { [weak self] fetched, total in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.groups = fetched
+                    self.totalGroupsCount = total
+                    self.isLoading = false
+                }
+            }
+        case .posts:
+            posts = []
+            postsNextFrom = nil
+            service.searchPosts(query: currentQuery, count: 30, startFrom: nil) { [weak self] fetched, nextToken in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.posts = fetched
+                    self.postsNextFrom = nextToken
+                    self.isLoading = false
+                }
+            }
+        case .videos:
+            videos = []
+            service.searchVideos(
+                query: currentQuery,
+                sort: videoSort.rawValue,
+                offset: 0,
+                count: 20
+            ) { [weak self] fetched, total in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.videos = fetched
+                    self.totalVideosCount = total
+                    self.isLoading = false
+                }
+            }
+        case .audios:
+            audios = []
+            service.searchAudios(
+                query: currentQuery,
+                sort: audioSort.rawValue,
+                performerOnly: audioPerformerOnly,
+                withLyrics: audioWithLyrics,
+                offset: 0,
+                count: 30
+            ) { [weak self] fetched, total in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.audios = fetched
+                    self.totalAudiosCount = total
+                    self.isLoading = false
+                }
+            }
+        case .documents:
+            documents = []
+            service.searchDocuments(
+                query: currentQuery,
+                type: docType.rawValue,
+                offset: 0,
+                count: 30
+            ) { [weak self] fetched, total in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.documents = fetched
+                    self.totalDocumentsCount = total
+                    self.isLoading = false
+                }
+            }
+        }
+    }
+
+    func loadMore() {
+        guard canLoadMore, !isLoading, !isLoadingMore else { return }
+        let currentQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        isLoadingMore = true
+
+        switch selectedCategory {
+        case .all:
+            isLoadingMore = false
+        case .users:
+            service.searchUsers(
+                query: currentQuery,
+                sort: userSort.rawValue,
+                onlyOnline: userOnlyOnline,
+                offset: users.count,
+                count: 30
+            ) { [weak self] fetched, total in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    if fetched.isEmpty {
+                        self.totalUsersCount = self.users.count
+                    } else {
+                        let existingIds = Set(self.users.map { $0.id })
+                        let unique = fetched.filter { !existingIds.contains($0.id) }
+                        self.users.append(contentsOf: unique)
+                        self.totalUsersCount = max(total, self.users.count)
+                    }
+                    self.isLoadingMore = false
                 }
             }
         case .groups:
             service.searchGroups(
                 query: currentQuery,
                 sort: groupSort.rawValue,
-                offset: 0,
-                count: 40
-            ) { [weak self] fetched in
+                offset: groups.count,
+                count: 30
+            ) { [weak self] fetched, total in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    self.groups = fetched
-                    self.isLoading = false
+                    if fetched.isEmpty {
+                        self.totalGroupsCount = self.groups.count
+                    } else {
+                        let existingIds = Set(self.groups.map { $0.id })
+                        let unique = fetched.filter { !existingIds.contains($0.id) }
+                        self.groups.append(contentsOf: unique)
+                        self.totalGroupsCount = max(total, self.groups.count)
+                    }
+                    self.isLoadingMore = false
                 }
             }
         case .posts:
-            service.searchPosts(query: currentQuery, count: 30, startFrom: nil) { [weak self] fetched in
+            service.searchPosts(
+                query: currentQuery,
+                count: 30,
+                startFrom: postsNextFrom
+            ) { [weak self] fetched, nextToken in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    self.posts = fetched
-                    self.isLoading = false
+                    if fetched.isEmpty || nextToken == self.postsNextFrom {
+                        self.postsNextFrom = nil
+                    } else {
+                        let existingIds = Set(self.posts.map { $0.id })
+                        let unique = fetched.filter { !existingIds.contains($0.id) }
+                        self.posts.append(contentsOf: unique)
+                        self.postsNextFrom = nextToken
+                    }
+                    self.isLoadingMore = false
                 }
             }
         case .videos:
             service.searchVideos(
                 query: currentQuery,
                 sort: videoSort.rawValue,
-                offset: 0,
-                count: 30
-            ) { [weak self] fetched in
+                offset: videos.count,
+                count: 20
+            ) { [weak self] fetched, total in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    self.videos = fetched
-                    self.isLoading = false
+                    if fetched.isEmpty {
+                        self.totalVideosCount = self.videos.count
+                    } else {
+                        let existingIds = Set(self.videos.map { $0.id })
+                        let unique = fetched.filter { !existingIds.contains($0.id) }
+                        self.videos.append(contentsOf: unique)
+                        self.totalVideosCount = max(total, self.videos.count)
+                    }
+                    self.isLoadingMore = false
                 }
             }
         case .audios:
@@ -321,26 +481,40 @@ final class SearchViewModel: ObservableObject {
                 sort: audioSort.rawValue,
                 performerOnly: audioPerformerOnly,
                 withLyrics: audioWithLyrics,
-                offset: 0,
-                count: 40
-            ) { [weak self] fetched in
+                offset: audios.count,
+                count: 30
+            ) { [weak self] fetched, total in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    self.audios = fetched
-                    self.isLoading = false
+                    if fetched.isEmpty {
+                        self.totalAudiosCount = self.audios.count
+                    } else {
+                        let existingIds = Set(self.audios.map { $0.id })
+                        let unique = fetched.filter { !existingIds.contains($0.id) }
+                        self.audios.append(contentsOf: unique)
+                        self.totalAudiosCount = max(total, self.audios.count)
+                    }
+                    self.isLoadingMore = false
                 }
             }
         case .documents:
             service.searchDocuments(
                 query: currentQuery,
                 type: docType.rawValue,
-                offset: 0,
-                count: 40
-            ) { [weak self] fetched in
+                offset: documents.count,
+                count: 30
+            ) { [weak self] fetched, total in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
-                    self.documents = fetched
-                    self.isLoading = false
+                    if fetched.isEmpty {
+                        self.totalDocumentsCount = self.documents.count
+                    } else {
+                        let existingIds = Set(self.documents.map { $0.id })
+                        let unique = fetched.filter { !existingIds.contains($0.id) }
+                        self.documents.append(contentsOf: unique)
+                        self.totalDocumentsCount = max(total, self.documents.count)
+                    }
+                    self.isLoadingMore = false
                 }
             }
         }

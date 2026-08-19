@@ -22,30 +22,33 @@ struct SearchAllResults {
 }
 
 protocol SearchServiceProtocol {
-    func searchUsers(query: String, sort: Int, onlyOnline: Bool, offset: Int, count: Int, completion: @escaping ([User]) -> Void)
-    func searchGroups(query: String, sort: Int, offset: Int, count: Int, completion: @escaping ([Community]) -> Void)
-    func searchPosts(query: String, count: Int, startFrom: String?, completion: @escaping ([Post]) -> Void)
-    func searchVideos(query: String, sort: Int, offset: Int, count: Int, completion: @escaping ([Video]) -> Void)
-    func searchAudios(query: String, sort: Int, performerOnly: Bool, withLyrics: Bool, offset: Int, count: Int, completion: @escaping ([AudioTrack]) -> Void)
-    func searchDocuments(query: String, type: Int, offset: Int, count: Int, completion: @escaping ([AppDocument]) -> Void)
+    func searchUsers(query: String, sort: Int, onlyOnline: Bool, offset: Int, count: Int, completion: @escaping ([User], Int) -> Void)
+    func searchGroups(query: String, sort: Int, offset: Int, count: Int, completion: @escaping ([Community], Int) -> Void)
+    func searchPosts(query: String, count: Int, startFrom: String?, completion: @escaping ([Post], String?) -> Void)
+    func searchVideos(query: String, sort: Int, offset: Int, count: Int, completion: @escaping ([Video], Int) -> Void)
+    func searchAudios(query: String, sort: Int, performerOnly: Bool, withLyrics: Bool, offset: Int, count: Int, completion: @escaping ([AudioTrack], Int) -> Void)
+    func searchDocuments(query: String, type: Int, offset: Int, count: Int, completion: @escaping ([AppDocument], Int) -> Void)
     func searchAll(query: String, completion: @escaping (SearchAllResults) -> Void)
 }
 
 extension SearchServiceProtocol {
     func searchUsers(query: String, offset: Int = 0, count: Int = 30, completion: @escaping ([User]) -> Void) {
-        searchUsers(query: query, sort: 4, onlyOnline: false, offset: offset, count: count, completion: completion)
+        searchUsers(query: query, sort: 4, onlyOnline: false, offset: offset, count: count) { users, _ in completion(users) }
     }
     func searchGroups(query: String, offset: Int = 0, count: Int = 30, completion: @escaping ([Community]) -> Void) {
-        searchGroups(query: query, sort: 0, offset: offset, count: count, completion: completion)
+        searchGroups(query: query, sort: 0, offset: offset, count: count) { groups, _ in completion(groups) }
+    }
+    func searchPosts(query: String, count: Int = 30, startFrom: String? = nil, completion: @escaping ([Post]) -> Void) {
+        searchPosts(query: query, count: count, startFrom: startFrom) { posts, _ in completion(posts) }
     }
     func searchVideos(query: String, offset: Int = 0, count: Int = 20, completion: @escaping ([Video]) -> Void) {
-        searchVideos(query: query, sort: 0, offset: offset, count: count, completion: completion)
+        searchVideos(query: query, sort: 0, offset: offset, count: count) { videos, _ in completion(videos) }
     }
     func searchAudios(query: String, offset: Int = 0, count: Int = 30, completion: @escaping ([AudioTrack]) -> Void) {
-        searchAudios(query: query, sort: 2, performerOnly: false, withLyrics: false, offset: offset, count: count, completion: completion)
+        searchAudios(query: query, sort: 2, performerOnly: false, withLyrics: false, offset: offset, count: count) { audios, _ in completion(audios) }
     }
     func searchDocuments(query: String, offset: Int = 0, count: Int = 30, completion: @escaping ([AppDocument]) -> Void) {
-        searchDocuments(query: query, type: 0, offset: offset, count: count, completion: completion)
+        searchDocuments(query: query, type: 0, offset: offset, count: count) { docs, _ in completion(docs) }
     }
 }
 
@@ -159,7 +162,7 @@ final class SearchService: SearchServiceProtocol {
 
     private init() {}
 
-    func searchUsers(query: String, sort: Int = 4, onlyOnline: Bool = false, offset: Int = 0, count: Int = 30, completion: @escaping ([User]) -> Void) {
+    func searchUsers(query: String, sort: Int = 4, onlyOnline: Bool = false, offset: Int = 0, count: Int = 30, completion: @escaping ([User], Int) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
         let fields = "photo_100,photo_200,city,online,status,friend_status,counters,about,personal,sex,site,last_seen,verified,can_write_private_message"
@@ -184,14 +187,15 @@ final class SearchService: SearchServiceProtocol {
             switch result {
             case .success(let response):
                 let mapped = self.mapUsers(response.items ?? [])
-                completion(mapped)
+                let total = response.count ?? mapped.count
+                completion(mapped, total)
             case .failure:
-                completion([])
+                completion([], 0)
             }
         }
     }
 
-    func searchGroups(query: String, sort: Int = 0, offset: Int = 0, count: Int = 30, completion: @escaping ([Community]) -> Void) {
+    func searchGroups(query: String, sort: Int = 0, offset: Int = 0, count: Int = 30, completion: @escaping ([Community], Int) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
         let params: [String: String] = [
@@ -215,14 +219,15 @@ final class SearchService: SearchServiceProtocol {
                 if sort == 1 {
                     mapped.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
                 }
-                completion(mapped)
+                let total = response.count ?? mapped.count
+                completion(mapped, total)
             case .failure:
-                completion([])
+                completion([], 0)
             }
         }
     }
 
-    func searchPosts(query: String, count: Int = 30, startFrom: String? = nil, completion: @escaping ([Post]) -> Void) {
+    func searchPosts(query: String, count: Int = 30, startFrom: String? = nil, completion: @escaping ([Post], String?) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
         if trimmed.isEmpty {
@@ -242,9 +247,9 @@ final class SearchService: SearchServiceProtocol {
                 switch result {
                 case .success(let response):
                     let mapped = FeedService.shared.mapVKFeed(response)
-                    completion(mapped)
+                    completion(mapped, response.nextFrom)
                 case .failure:
-                    completion([])
+                    completion([], nil)
                 }
             }
         } else {
@@ -266,15 +271,15 @@ final class SearchService: SearchServiceProtocol {
                 switch result {
                 case .success(let response):
                     let mapped = FeedService.shared.mapVKFeed(response)
-                    completion(mapped)
+                    completion(mapped, response.nextFrom)
                 case .failure:
-                    completion([])
+                    completion([], nil)
                 }
             }
         }
     }
 
-    func searchVideos(query: String, sort: Int = 0, offset: Int = 0, count: Int = 20, completion: @escaping ([Video]) -> Void) {
+    func searchVideos(query: String, sort: Int = 0, offset: Int = 0, count: Int = 20, completion: @escaping ([Video], Int) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
         let params: [String: String] = [
@@ -295,14 +300,15 @@ final class SearchService: SearchServiceProtocol {
             switch result {
             case .success(let response):
                 let mapped = self.mapVideos(response.items ?? [])
-                completion(mapped)
+                let total = response.count ?? mapped.count
+                completion(mapped, total)
             case .failure:
-                completion([])
+                completion([], 0)
             }
         }
     }
 
-    func searchAudios(query: String, sort: Int = 2, performerOnly: Bool = false, withLyrics: Bool = false, offset: Int = 0, count: Int = 30, completion: @escaping ([AudioTrack]) -> Void) {
+    func searchAudios(query: String, sort: Int = 2, performerOnly: Bool = false, withLyrics: Bool = false, offset: Int = 0, count: Int = 30, completion: @escaping ([AudioTrack], Int) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
         if trimmed.isEmpty {
@@ -320,9 +326,10 @@ final class SearchService: SearchServiceProtocol {
                 switch result {
                 case .success(let response):
                     let mapped = self.mapAudios(response.items ?? [])
-                    completion(mapped)
+                    let total = response.count ?? mapped.count
+                    completion(mapped, total)
                 case .failure:
-                    completion([])
+                    completion([], 0)
                 }
             }
         } else {
@@ -349,15 +356,16 @@ final class SearchService: SearchServiceProtocol {
                 switch result {
                 case .success(let response):
                     let mapped = self.mapAudios(response.items ?? [])
-                    completion(mapped)
+                    let total = response.count ?? mapped.count
+                    completion(mapped, total)
                 case .failure:
-                    completion([])
+                    completion([], 0)
                 }
             }
         }
     }
 
-    func searchDocuments(query: String, type: Int = 0, offset: Int = 0, count: Int = 30, completion: @escaping ([AppDocument]) -> Void) {
+    func searchDocuments(query: String, type: Int = 0, offset: Int = 0, count: Int = 30, completion: @escaping ([AppDocument], Int) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
         var params: [String: String] = [
@@ -379,9 +387,10 @@ final class SearchService: SearchServiceProtocol {
             switch result {
             case .success(let response):
                 let items = (response.items ?? []).map { $0.toAppDocument() }
-                completion(items)
+                let total = response.count ?? items.count
+                completion(items, total)
             case .failure:
-                completion([])
+                completion([], 0)
             }
         }
     }
@@ -393,37 +402,37 @@ final class SearchService: SearchServiceProtocol {
         let group = DispatchGroup()
         
         group.enter()
-        searchUsers(query: trimmed, offset: 0, count: 5) { users in
+        searchUsers(query: trimmed, offset: 0, count: 5) { users, _ in
             results.users = users
             group.leave()
         }
         
         group.enter()
-        searchGroups(query: trimmed, offset: 0, count: 5) { groups in
+        searchGroups(query: trimmed, offset: 0, count: 5) { groups, _ in
             results.groups = groups
             group.leave()
         }
         
         group.enter()
-        searchPosts(query: trimmed, count: 5, startFrom: nil) { posts in
+        searchPosts(query: trimmed, count: 5, startFrom: nil) { posts, _ in
             results.posts = posts
             group.leave()
         }
         
         group.enter()
-        searchVideos(query: trimmed, offset: 0, count: 6) { videos in
+        searchVideos(query: trimmed, offset: 0, count: 6) { videos, _ in
             results.videos = videos
             group.leave()
         }
         
         group.enter()
-        searchAudios(query: trimmed, offset: 0, count: 5) { audios in
+        searchAudios(query: trimmed, offset: 0, count: 5) { audios, _ in
             results.audios = audios
             group.leave()
         }
         
         group.enter()
-        searchDocuments(query: trimmed, offset: 0, count: 5) { docs in
+        searchDocuments(query: trimmed, offset: 0, count: 5) { docs, _ in
             results.documents = docs
             group.leave()
         }

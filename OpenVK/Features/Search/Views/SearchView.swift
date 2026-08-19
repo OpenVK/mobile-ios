@@ -40,7 +40,7 @@ struct SearchView: View {
                     Color(.systemBackground)
                         .edgesIgnoringSafeArea(.all)
 
-                    if viewModel.isLoading && isContentEmpty {
+                    if viewModel.isLoading {
                         loadingView
                     } else if viewModel.isCurrentResultsEmpty {
                         emptyResultsView
@@ -67,8 +67,14 @@ struct SearchView: View {
                     .foregroundColor(.primary)
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
+                    .onSubmit {
+                        viewModel.performSearch(viewModel.query, force: true)
+                    }
 
-                if !viewModel.query.isEmpty {
+                if viewModel.isLoading {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else if !viewModel.query.isEmpty {
                     Button(action: {
                         HapticManager.impact(.light)
                         viewModel.clearQuery()
@@ -161,17 +167,22 @@ struct SearchView: View {
         case .all:
             return ""
         case .users:
-            return "\(viewModel.users.count) пользователей"
+            let count = max(viewModel.totalUsersCount, viewModel.users.count)
+            return count > 0 ? "\(count) пользователей" : ""
         case .groups:
-            return "\(viewModel.groups.count) сообществ"
+            let count = max(viewModel.totalGroupsCount, viewModel.groups.count)
+            return count > 0 ? "\(count) групп" : ""
         case .posts:
-            return "\(viewModel.posts.count) записей"
+            return viewModel.posts.count > 0 ? "\(viewModel.posts.count) записей" : ""
         case .videos:
-            return "\(viewModel.videos.count) видео"
+            let count = max(viewModel.totalVideosCount, viewModel.videos.count)
+            return count > 0 ? "\(count) видео" : ""
         case .audios:
-            return "\(viewModel.audios.count) аудиозаписей"
+            let count = max(viewModel.totalAudiosCount, viewModel.audios.count)
+            return count > 0 ? "\(count) аудиозаписей" : ""
         case .documents:
-            return "\(viewModel.documents.count) документов"
+            let count = max(viewModel.totalDocumentsCount, viewModel.documents.count)
+            return count > 0 ? "\(count) документов" : ""
         }
     }
 
@@ -446,65 +457,119 @@ struct SearchView: View {
         .padding(.bottom, 4)
     }
 
+    @ViewBuilder
     private var usersFullListView: some View {
-        VStack(spacing: 0) {
-            ForEach(viewModel.users) { user in
-                userRow(user)
-                SectionSeparator()
-            }
+        ForEach(viewModel.users) { user in
+            userRow(user)
+                .onAppear {
+                    if user.id == viewModel.users.last?.id {
+                        viewModel.loadMore()
+                    }
+                }
+            SectionSeparator()
+        }
+        if viewModel.isLoadingMore {
+            paginationLoadingView
         }
     }
 
+    @ViewBuilder
     private var groupsFullListView: some View {
-        VStack(spacing: 0) {
-            ForEach(viewModel.groups) { group in
-                groupRow(group)
-                SectionSeparator()
-            }
+        ForEach(viewModel.groups) { group in
+            groupRow(group)
+                .onAppear {
+                    if group.id == viewModel.groups.last?.id {
+                        viewModel.loadMore()
+                    }
+                }
+            SectionSeparator()
+        }
+        if viewModel.isLoadingMore {
+            paginationLoadingView
         }
     }
 
+    @ViewBuilder
     private var postsFullListView: some View {
-        VStack(spacing: 10) {
-            ForEach(viewModel.posts) { post in
-                PostCard(
-                    post: post,
-                    showCommentsButton: true,
-                    showCommentPreview: true,
-                    selectedMedia: $selectedMedia,
-                    owningPost: $owningPost
-                )
-                SectionSeparator()
+        ForEach(viewModel.posts) { post in
+            PostCard(
+                post: post,
+                showCommentsButton: true,
+                showCommentPreview: true,
+                selectedMedia: $selectedMedia,
+                owningPost: $owningPost
+            )
+            .onAppear {
+                if post.id == viewModel.posts.last?.id {
+                    viewModel.loadMore()
+                }
             }
+            .padding(.top, 6)
+            SectionSeparator()
         }
-        .padding(.top, 6)
+        if viewModel.isLoadingMore {
+            paginationLoadingView
+        }
     }
 
+    @ViewBuilder
     private var videosFullGridView: some View {
         LazyVGrid(columns: videoColumns, spacing: 12) {
             ForEach(viewModel.videos) { video in
                 videoGridItem(video, allVideos: viewModel.videos)
+                    .onAppear {
+                        if video.id == viewModel.videos.last?.id {
+                            viewModel.loadMore()
+                        }
+                    }
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
-    }
-
-    private var audiosFullListView: some View {
-        VStack(spacing: 0) {
-            ForEach(viewModel.audios) { track in
-                audioRow(track)
-                SectionSeparator()
-            }
+        
+        if viewModel.isLoadingMore {
+            paginationLoadingView
         }
     }
 
+    @ViewBuilder
+    private var audiosFullListView: some View {
+        ForEach(viewModel.audios) { track in
+            audioRow(track)
+                .onAppear {
+                    if track.id == viewModel.audios.last?.id {
+                        viewModel.loadMore()
+                    }
+                }
+            SectionSeparator()
+        }
+        if viewModel.isLoadingMore {
+            paginationLoadingView
+        }
+    }
+
+    @ViewBuilder
     private var documentsFullListView: some View {
-        VStack(spacing: 0) {
-            ForEach(viewModel.documents) { doc in
-                documentRow(doc)
-                SectionSeparator()
-            }
+        ForEach(viewModel.documents) { doc in
+            documentRow(doc)
+                .onAppear {
+                    if doc.id == viewModel.documents.last?.id {
+                        viewModel.loadMore()
+                    }
+                }
+            SectionSeparator()
+        }
+        if viewModel.isLoadingMore {
+            paginationLoadingView
+        }
+    }
+
+    private var paginationLoadingView: some View {
+        HStack {
+            Spacer()
+            ProgressView()
+                .padding(.vertical, 16)
+            Spacer()
         }
     }
 
@@ -542,7 +607,25 @@ struct SearchView: View {
                         SupporterBadgeView(screenName: user.username, size: 12)
                     }
 
-                    if let status = user.status, !status.isEmpty {
+                    if user.isOnline {
+                        HStack(spacing: 4) {
+                            Text("В сети")
+                                .font(.system(size: 13))
+                                .foregroundColor(.appAccent)
+                            if let platform = user.onlinePlatform {
+                                PlatformIconView(platform: platform, size: 10, color: .appAccent)
+                            }
+                        }
+                    } else if let lastSeen = user.lastSeen, !lastSeen.isEmpty {
+                        HStack(spacing: 4) {
+                            Text(lastSeen)
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                            if let platform = user.onlinePlatform {
+                                PlatformIconView(platform: platform, size: 10, color: .secondary)
+                            }
+                        }
+                    } else if let status = user.status, !status.isEmpty {
                         Text(status)
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
@@ -551,11 +634,6 @@ struct SearchView: View {
                         Text(city)
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    } else if let lastSeen = user.lastSeen {
-                        Text(lastSeen)
-                            .font(.system(size: 12))
-                            .foregroundColor(Color(.tertiaryLabel))
                             .lineLimit(1)
                     }
                 }
