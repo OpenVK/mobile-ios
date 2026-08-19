@@ -42,7 +42,7 @@ final class BirthdaysService: BirthdaysServiceProtocol {
             ],
             httpMethod: "GET",
             as: VKSearchResponseInner<VKUserProfile>.self
-        ) { [weak self] result in
+        ) { [weak self] (result: Result<VKSearchResponseInner<VKUserProfile>, APIError>) in
             guard let self = self else { return }
             switch result {
             case .success(let inner):
