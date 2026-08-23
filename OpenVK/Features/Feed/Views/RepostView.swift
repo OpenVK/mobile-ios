@@ -523,7 +523,7 @@ struct RepostView: View {
                 conversations = items.map { conversation in
                     ShareRecipient(
                         id: conversation.peer.uid ?? 0,
-                        user: conversation.peer,
+                        user: conversation.peer.toUser(),
                         subtitle: "@\(conversation.peer.username)"
                     )
                 }

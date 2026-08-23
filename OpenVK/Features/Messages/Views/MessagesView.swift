@@ -9,31 +9,54 @@ struct MessagesView: View {
 
     @StateObject private var viewModel = MessagesViewModel()
     @State private var showNewChat = false
+    @State private var showCreateGroupChat = false
 
     var body: some View {
         NavigationView {
-            listWithNav
-                .navigationBarTitle(L10n.Messages.title)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
+            ZStack {
+                if viewModel.isLoading && viewModel.conversations.isEmpty {
+                    VStack {
+                        Spacer()
+                        LongLoadingIndicator(message: "Загрузка диалогов...", timeout: 5.0)
+                        Spacer()
+                    }
+                } else if viewModel.filteredConversations.isEmpty {
+                    emptyState
+                } else {
+                    list
+                }
+            }
+            .background(Color(.systemBackground))
+            .navigationBarTitle(L10n.Messages.title, displayMode: .inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
                         Button(action: { showNewChat = true }) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 17))
-                                .foregroundColor(.appAccent)
+                            Label("Написать сообщение", systemImage: "square.and.pencil")
                         }
+                        Button(action: { showCreateGroupChat = true }) {
+                            Label("Создать беседу", systemImage: "person.2.badge.plus")
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 17))
+                            .foregroundColor(.appAccent)
                     }
                 }
+            }
+            .searchable(text: $viewModel.searchQuery, prompt: "Поиск сообщений")
         }
         .navigationViewStyle(StackNavigationViewStyle())
-        .fullScreenCover(isPresented: $showNewChat) {
+        .sheet(isPresented: $showNewChat) {
             NewChatView()
                 .accentColor(Color.appAccent)
-                .tint(Color.appAccent)
+        }
+        .sheet(isPresented: $showCreateGroupChat) {
+            CreateChatView(viewModel: viewModel)
+                .accentColor(Color.appAccent)
         }
         .onAppear {
-            if viewModel.conversations.isEmpty {
-                viewModel.load()
-            }
+            viewModel.load()
         }
     }
 
@@ -43,7 +66,7 @@ struct MessagesView: View {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 44))
                 .foregroundColor(Color(.tertiaryLabel))
-            Text(L10n.Messages.empty)
+            Text(viewModel.searchQuery.isEmpty ? L10n.Messages.empty : "Ничего не найдено")
                 .font(.system(size: 15))
                 .foregroundColor(.secondary)
                 .padding(.top, 10)
@@ -51,34 +74,30 @@ struct MessagesView: View {
         }
     }
 
-    private var listWithNav: some View {
-        Group {
-            if viewModel.isLoading && viewModel.conversations.isEmpty {
-                VStack {
-                    Spacer()
-                    LongLoadingIndicator(message: "Насколько сильно любите диалоги в опенвк? Я очень... :)", timeout: 5.0)
-                    Spacer()
-                }
-            } else if viewModel.conversations.isEmpty {
-                emptyState
-            } else {
-                list
-            }
-        }
-    }
-
     private var list: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(viewModel.conversations) { convo in
+                ForEach(viewModel.filteredConversations) { convo in
                     NavigationLink(destination: ChatView(conversation: convo)) {
-                        ConversationRow(conversation: convo)
+                        ConversationRow(
+                            conversation: convo,
+                            typingStatus: viewModel.typingPeers[convo.peer.id]
+                        )
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .contextMenu {
+                        Button(action: { viewModel.markAsRead(conversation: convo) }) {
+                            Label("Прочитано", systemImage: "checkmark.circle")
+                        }
+                        Button(action: { viewModel.toggleImportant(conversation: convo) }) {
+                            Label(convo.isImportant ? "Убрать из важных" : "В важные", systemImage: convo.isImportant ? "star.slash" : "star")
+                        }
+                    }
+
                     SectionSeparator()
                 }
 
-                if viewModel.hasMore {
+                if viewModel.hasMore && viewModel.searchQuery.isEmpty {
                     Button(action: { viewModel.loadMore() }) {
                         HStack {
                             Spacer()
@@ -125,7 +144,7 @@ struct NewChatView: View {
         NavigationView {
             ZStack {
                 if isLoading {
-                    LongLoadingIndicator(message: "Насколько сильно любите диалоги в опенвк? Я очень... :)", timeout: 5.0)
+                    LongLoadingIndicator(message: "Загрузка друзей...", timeout: 5.0)
                 } else {
                     List {
                         if !filteredFriends.isEmpty {
@@ -139,7 +158,7 @@ struct NewChatView: View {
                                                     Text(user.displayName)
                                                         .font(.system(size: 15, weight: .medium))
                                                         .foregroundColor(.primary)
-                                                    
+
                                                     if user.isOfficial == true {
                                                         Image(systemName: "checkmark.seal.fill")
                                                             .font(.system(size: 14))
@@ -192,11 +211,11 @@ struct NewChatView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationBarTitle("Новый чат", displayMode: .inline)
+            .navigationBarTitle("Новое сообщение", displayMode: .inline)
             .navigationBarItems(leading: Button("Закрыть") {
                 presentationMode.wrappedValue.dismiss()
             })
-            .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .always), prompt: "Поиск...")
+            .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .always), prompt: "Поиск друзей...")
             .onAppear { loadFriends() }
         }
         .navigationViewStyle(StackNavigationViewStyle())
@@ -242,14 +261,14 @@ struct NewChatView: View {
 
     private func loadMoreFriends() {
         guard !isLoading, !isLoadingMore, hasMore else { return }
-        
+
         if let lastID = filteredFriends.last?.id {
             if lastTriggeredID == lastID {
                 return
             }
             lastTriggeredID = lastID
         }
-        
+
         isLoadingMore = true
         APIClient.shared.call(
             method: "friends.get",
@@ -290,7 +309,7 @@ struct NewChatView: View {
 }
 
 struct LongLoadingIndicator: View {
-    var message: String = "Насколько сильно любите диалоги в опенвк? Я очень... :)"
+    var message: String = "Загрузка..."
     var timeout: TimeInterval = 5.0
 
     @State private var showMessage = false

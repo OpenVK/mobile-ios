@@ -118,6 +118,10 @@
 		24A1000000000000000000B2 /* SupporterBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000B1 /* SupporterBadgeView.swift */; };
 		24A1000000000000000000C2 /* SupportersService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000C1 /* SupportersService.swift */; };
 		24A1000000000000000000D2 /* SupportersListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000D1 /* SupportersListView.swift */; };
+		24A200000000000000000002 /* LongPollService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A200000000000000000001 /* LongPollService.swift */; };
+		24A200000000000000000004 /* CreateChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A200000000000000000003 /* CreateChatView.swift */; };
+		24A200000000000000000006 /* ChatDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A200000000000000000005 /* ChatDetailsView.swift */; };
+		24A200000000000000000008 /* StickerPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A200000000000000000007 /* StickerPickerView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -254,6 +258,10 @@
 		24A1000000000000000000B1 /* SupporterBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupporterBadgeView.swift; sourceTree = "<group>"; };
 		24A1000000000000000000C1 /* SupportersService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportersService.swift; sourceTree = "<group>"; };
 		24A1000000000000000000D1 /* SupportersListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportersListView.swift; sourceTree = "<group>"; };
+		24A200000000000000000001 /* LongPollService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LongPollService.swift; sourceTree = "<group>"; };
+		24A200000000000000000003 /* CreateChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateChatView.swift; sourceTree = "<group>"; };
+		24A200000000000000000005 /* ChatDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDetailsView.swift; sourceTree = "<group>"; };
+		24A200000000000000000007 /* StickerPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickerPickerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -411,6 +419,7 @@
 				24884EB0C96EA6F983392A6C /* ReportsService.swift */,
 				24885C9AAF0AF9425CF32BDF /* SearchService.swift */,
 				24A1000000000000000000C1 /* SupportersService.swift */,
+				24A200000000000000000001 /* LongPollService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -651,6 +660,9 @@
 				2488B4961DB0B136AFD9155F /* ChatView.swift */,
 				2488EF1996085864BAD0E827 /* ConversationRow.swift */,
 				248876F80B9AF9F0330F6D4E /* MessagesView.swift */,
+				24A200000000000000000003 /* CreateChatView.swift */,
+				24A200000000000000000005 /* ChatDetailsView.swift */,
+				24A200000000000000000007 /* StickerPickerView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -1042,6 +1054,10 @@
 				24A1000000000000000000B2 /* SupporterBadgeView.swift in Sources */,
 				24A1000000000000000000C2 /* SupportersService.swift in Sources */,
 				24A1000000000000000000D2 /* SupportersListView.swift in Sources */,
+				24A200000000000000000002 /* LongPollService.swift in Sources */,
+				24A200000000000000000004 /* CreateChatView.swift in Sources */,
+				24A200000000000000000006 /* ChatDetailsView.swift in Sources */,
+				24A200000000000000000008 /* StickerPickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -8,43 +8,123 @@ import SwiftUI
 struct ConversationRow: View {
 
     let conversation: Conversation
+    var typingStatus: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
-            Avatar(user: conversation.peer, size: 48)
+            Avatar(peer: conversation.peer, size: 50)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 4) {
-                    Text(conversation.peer.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .center, spacing: 4) {
+                    if conversation.peer.type == .chat {
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+
+                    Text(conversation.peer.title)
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundColor(.primary)
-                    
+                        .lineLimit(1)
+
                     if conversation.peer.isOfficial == true {
                         Image(systemName: "checkmark.seal.fill")
-                            .font(.system(size: 14))
+                            .font(.system(size: 13))
                             .foregroundColor(.appAccent)
                     }
-                    SupporterBadgeView(screenName: conversation.peer.username)
-                }
-                let prefix = conversation.lastMessageOutgoing ? "Вы: " : ""
-                Text(prefix + conversation.lastMessage)
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
 
-            if conversation.unreadCount > 0 {
-                Text("\(conversation.unreadCount)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Capsule().fill(Color.appAccent))
+                    Spacer()
+
+                    Text(formatDate(conversation.updatedAt))
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+
+                HStack(spacing: 4) {
+                    if let typing = typingStatus {
+                        HStack(spacing: 4) {
+                            TypingIndicatorDots()
+                            Text(typing)
+                                .font(.system(size: 14))
+                                .foregroundColor(.appAccent)
+                        }
+                    } else {
+                        if conversation.lastMessageOutgoing {
+                            Text("Вы:")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.secondary)
+                        }
+
+                        Text(conversation.lastMessage.isEmpty ? "Нет сообщений" : conversation.lastMessage)
+                            .font(.system(size: 14))
+                            .foregroundColor(conversation.unreadCount > 0 && !conversation.lastMessageOutgoing ? .primary : .secondary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer()
+
+                    if conversation.isImportant {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                    }
+
+                    if conversation.unreadCount > 0 {
+                        Text("\(conversation.unreadCount)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.appAccent))
+                    } else if conversation.lastMessageOutgoing {
+                        Image(systemName: conversation.outRead >= conversation.lastMessageId ? "checkmark.circle.fill" : "checkmark.circle")
+                            .font(.system(size: 13))
+                            .foregroundColor(conversation.outRead >= conversation.lastMessageId ? .appAccent : Color(.systemGray4))
+                    }
+                }
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            return formatter.string(from: date)
+        } else if calendar.isDateInYesterday(date) {
+            return "Вчера"
+        } else {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "dd.MM.yy"
+            return formatter.string(from: date)
+        }
+    }
+}
+
+struct TypingIndicatorDots: View {
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<3) { i in
+                Circle()
+                    .fill(Color.appAccent)
+                    .frame(width: 3.5, height: 3.5)
+                    .scaleEffect(animating ? 1.0 : 0.4)
+                    .animation(
+                        Animation.easeInOut(duration: 0.6)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.2),
+                        value: animating
+                    )
+            }
+        }
+        .onAppear {
+            animating = true
+        }
     }
 }
