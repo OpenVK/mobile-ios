@@ -259,6 +259,8 @@ final class ChatViewModel: ObservableObject {
     @Published var peerTypingText: String?
     @Published var shouldScrollToBottom = false
     @Published var scrollToMessageId: Int?
+    @Published var highlightedMessageId: Int?
+    @Published var messageReactions: [Int: String] = [:]
     @Published var attachedImages: [UIImage] = []
 
     private(set) var hasMore = true
@@ -586,6 +588,66 @@ final class ChatViewModel: ObservableObject {
                     self?.clearSelection()
                 }
             }
+        }
+    }
+
+    func toggleReaction(_ emoji: String, on messageId: Int) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            if messageReactions[messageId] == emoji {
+                messageReactions.removeValue(forKey: messageId)
+            } else {
+                messageReactions[messageId] = emoji
+            }
+        }
+        HapticManager.impact(.light)
+    }
+
+    func flashMessage(_ id: Int) {
+        scrollToMessageId = id
+        withAnimation(.easeInOut(duration: 0.2)) {
+            highlightedMessageId = id
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            withAnimation(.easeInOut(duration: 0.4)) {
+                if self?.highlightedMessageId == id {
+                    self?.highlightedMessageId = nil
+                }
+            }
+        }
+    }
+
+    func clusterPosition(for index: Int) -> MessageClusterPosition {
+        guard index >= 0 && index < messages.count else { return .single }
+        let current = messages[index]
+        if current.sticker != nil { return .single }
+
+        let hasAbove: Bool = {
+            let nextIndex = index + 1
+            guard nextIndex < messages.count else { return false }
+            let aboveMsg = messages[nextIndex]
+            return aboveMsg.fromId == current.fromId &&
+                aboveMsg.sticker == nil &&
+                abs(aboveMsg.date.timeIntervalSince(current.date)) < 300
+        }()
+
+        // In inverted scroll: index - 1 is the message visually BELOW
+        let hasBelow: Bool = {
+            let prevIndex = index - 1
+            guard prevIndex >= 0 else { return false }
+            let belowMsg = messages[prevIndex]
+            return belowMsg.fromId == current.fromId &&
+                belowMsg.sticker == nil &&
+                abs(belowMsg.date.timeIntervalSince(current.date)) < 300
+        }()
+
+        if !hasAbove && !hasBelow {
+            return .single
+        } else if !hasAbove && hasBelow {
+            return .top
+        } else if hasAbove && hasBelow {
+            return .middle
+        } else {
+            return .bottom
         }
     }
 

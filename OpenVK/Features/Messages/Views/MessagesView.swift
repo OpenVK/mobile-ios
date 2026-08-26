@@ -94,7 +94,8 @@ struct MessagesView: View {
                         }
                     }
 
-                    SectionSeparator()
+                    Divider()
+                        .padding(.leading, 76)
                 }
 
                 if viewModel.hasMore && viewModel.searchQuery.isEmpty {

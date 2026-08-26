@@ -69,23 +69,28 @@ struct ConversationRow: View {
                             .foregroundColor(.orange)
                     }
 
+                    if conversation.isMuted {
+                        Image(systemName: "speaker.slash.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(.tertiaryLabel))
+                    }
+
                     if conversation.unreadCount > 0 {
                         Text("\(conversation.unreadCount)")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.appAccent))
+                            .background(Capsule().fill(conversation.isMuted ? Color(.systemGray4) : Color.appAccent))
                     } else if conversation.lastMessageOutgoing {
-                        Image(systemName: conversation.outRead >= conversation.lastMessageId ? "checkmark.circle.fill" : "checkmark.circle")
-                            .font(.system(size: 13))
-                            .foregroundColor(conversation.outRead >= conversation.lastMessageId ? .appAccent : Color(.systemGray4))
+                        let isRead = conversation.outRead >= conversation.lastMessageId && conversation.lastMessageId > 0
+                        DoubleCheckmarksView(isRead: isRead, color: isRead ? .appAccent : Color(.systemGray3))
                     }
                 }
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 9)
         .contentShape(Rectangle())
     }
 
@@ -97,10 +102,34 @@ struct ConversationRow: View {
             return formatter.string(from: date)
         } else if calendar.isDateInYesterday(date) {
             return "Вчера"
+        } else if let days = calendar.dateComponents([.day], from: date, to: Date()).day, days < 7 {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "ru_RU")
+            formatter.dateFormat = "E"
+            return formatter.string(from: date).capitalized
         } else {
             let formatter = DateFormatter()
             formatter.dateFormat = "dd.MM.yy"
             return formatter.string(from: date)
+        }
+    }
+}
+
+struct DoubleCheckmarksView: View {
+    let isRead: Bool
+    var size: CGFloat = 11
+    var color: Color = .appAccent
+
+    var body: some View {
+        HStack(spacing: -5) {
+            Image(systemName: "checkmark")
+                .font(.system(size: size, weight: .bold))
+                .foregroundColor(color)
+            if isRead {
+                Image(systemName: "checkmark")
+                    .font(.system(size: size, weight: .bold))
+                    .foregroundColor(color)
+            }
         }
     }
 }

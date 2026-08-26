@@ -20,6 +20,7 @@ struct Peer: Identifiable, Hashable, Equatable {
     let avatarURL: URL?
     let isOnline: Bool?
     let onlinePlatform: String?
+    let lastSeen: String?
     let membersCount: Int?
     let isOfficial: Bool?
     let user: User?
@@ -32,6 +33,7 @@ struct Peer: Identifiable, Hashable, Equatable {
         avatarURL: URL? = nil,
         isOnline: Bool? = nil,
         onlinePlatform: String? = nil,
+        lastSeen: String? = nil,
         membersCount: Int? = nil,
         isOfficial: Bool? = nil,
         user: User? = nil,
@@ -43,6 +45,7 @@ struct Peer: Identifiable, Hashable, Equatable {
         self.avatarURL = avatarURL
         self.isOnline = isOnline
         self.onlinePlatform = onlinePlatform
+        self.lastSeen = lastSeen
         self.membersCount = membersCount
         self.isOfficial = isOfficial
         self.user = user
@@ -73,6 +76,7 @@ struct Peer: Identifiable, Hashable, Equatable {
             avatarURL: avatarURL,
             isOnline: isOnline ?? false,
             onlinePlatform: onlinePlatform,
+            lastSeen: lastSeen,
             isGroup: type == .group,
             isOfficial: isOfficial ?? false
         )
@@ -182,6 +186,7 @@ struct Conversation: Identifiable, Hashable {
             avatarURL: peer.avatarURL,
             isOnline: peer.isOnline,
             onlinePlatform: peer.onlinePlatform,
+            lastSeen: peer.lastSeen,
             isOfficial: peer.isOfficial,
             user: peer
         )
@@ -217,6 +222,13 @@ struct StickerPack: Identifiable, Hashable {
     let stickers: [Sticker]
 }
 
+enum MessageClusterPosition: Equatable, Hashable {
+    case single
+    case top
+    case middle
+    case bottom
+}
+
 struct Message: Identifiable, Equatable, Hashable {
     let id: Int
     let peerId: Int
@@ -227,6 +239,7 @@ struct Message: Identifiable, Equatable, Hashable {
     let isRead: Bool
     let attachments: [Attachment]
     let replyMessage: MessageReply?
+    let forwardMessages: [MessageReply]
     let isPinned: Bool
     let isImportant: Bool
     let isDeleted: Bool
@@ -234,6 +247,7 @@ struct Message: Identifiable, Equatable, Hashable {
     let sticker: Sticker?
     let senderName: String?
     let senderAvatarURL: URL?
+    let reaction: String?
 
     enum Direction: Equatable, Hashable {
         case incoming
@@ -250,13 +264,15 @@ struct Message: Identifiable, Equatable, Hashable {
         isRead: Bool = false,
         attachments: [Attachment] = [],
         replyMessage: MessageReply? = nil,
+        forwardMessages: [MessageReply] = [],
         isPinned: Bool = false,
         isImportant: Bool = false,
         isDeleted: Bool = false,
         isEdited: Bool = false,
         sticker: Sticker? = nil,
         senderName: String? = nil,
-        senderAvatarURL: URL? = nil
+        senderAvatarURL: URL? = nil,
+        reaction: String? = nil
     ) {
         self.id = id
         self.peerId = peerId
@@ -267,6 +283,7 @@ struct Message: Identifiable, Equatable, Hashable {
         self.isRead = isRead
         self.attachments = attachments
         self.replyMessage = replyMessage
+        self.forwardMessages = forwardMessages
         self.isPinned = isPinned
         self.isImportant = isImportant
         self.isDeleted = isDeleted
@@ -274,6 +291,7 @@ struct Message: Identifiable, Equatable, Hashable {
         self.sticker = sticker
         self.senderName = senderName
         self.senderAvatarURL = senderAvatarURL
+        self.reaction = reaction
     }
 }
 
@@ -283,6 +301,23 @@ struct MessageReply: Identifiable, Equatable, Hashable {
     let senderName: String
     let text: String
     let attachments: [Attachment]
+    let date: Date?
+
+    init(
+        id: Int,
+        fromId: Int,
+        senderName: String,
+        text: String,
+        attachments: [Attachment] = [],
+        date: Date? = nil
+    ) {
+        self.id = id
+        self.fromId = fromId
+        self.senderName = senderName
+        self.text = text
+        self.attachments = attachments
+        self.date = date
+    }
 }
 
 extension KeyedDecodingContainer {
@@ -538,6 +573,7 @@ struct VKIMMessageItem: Decodable {
     let isDeleted: Bool?
     let isEdited: Bool?
     let replyMessage: VKIMMessageReplyItem?
+    let fwdMessages: [VKIMMessageReplyItem]?
     let attachments: [VKIMAttachmentItem]?
 
     enum CodingKeys: String, CodingKey {
@@ -556,6 +592,7 @@ struct VKIMMessageItem: Decodable {
         case deleted
         case edited
         case replyMessage
+        case fwdMessages = "fwd_messages"
         case attachments
     }
 
@@ -576,6 +613,7 @@ struct VKIMMessageItem: Decodable {
         isDeleted = container.decodeSafeBool(forKey: .deleted)
         isEdited = container.decodeSafeBool(forKey: .edited)
         replyMessage = try? container.decode(VKIMMessageReplyItem.self, forKey: .replyMessage)
+        fwdMessages = try? container.decode([VKIMMessageReplyItem].self, forKey: .fwdMessages)
 
         if let attArray = try? container.decode([VKIMAttachmentItem].self, forKey: .attachments) {
             attachments = attArray
@@ -748,6 +786,7 @@ struct VKIMDocItem: Decodable {
     let size: Int?
     let ext: String?
     let url: String?
+    let preview: VKIMDocPreviewItem?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -756,6 +795,23 @@ struct VKIMDocItem: Decodable {
         case size
         case ext
         case url
+        case preview
+    }
+}
+
+struct VKIMDocPreviewItem: Decodable {
+    let photo: VKIMDocPreviewPhotoItem?
+
+    enum CodingKeys: String, CodingKey {
+        case photo
+    }
+}
+
+struct VKIMDocPreviewPhotoItem: Decodable {
+    let sizes: [VKIMPhotoSizeItem]?
+
+    enum CodingKeys: String, CodingKey {
+        case sizes
     }
 }
 

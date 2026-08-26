@@ -80,7 +80,7 @@ final class MessagesService: MessagesServiceProtocol {
             "offset": "\(offset)",
             "count": "\(count)",
             "extended": "1",
-            "fields": "id,first_name,last_name,screen_name,photo_100,photo_200,online,last_seen,verified,name"
+            "fields": "id,first_name,last_name,screen_name,photo_100,photo_200,online,last_seen,sex,verified,name"
         ]
         if let filter = filter, !filter.isEmpty {
             params["filter"] = filter
@@ -109,7 +109,7 @@ final class MessagesService: MessagesServiceProtocol {
         var params: [String: String] = [
             "peer_ids": peerIds.map(String.init).joined(separator: ","),
             "extended": "1",
-            "fields": "id,first_name,last_name,screen_name,photo_100,photo_200,online,last_seen,verified,name"
+            "fields": "id,first_name,last_name,screen_name,photo_100,photo_200,online,last_seen,sex,verified,name"
         ]
         if let groupId = groupId, groupId > 0 {
             params["group_id"] = "\(groupId)"
@@ -700,6 +700,7 @@ final class MessagesService: MessagesServiceProtocol {
                     avatarURL: avatarURL,
                     isOnline: user?.isOnline,
                     onlinePlatform: user?.onlinePlatform,
+                    lastSeen: user?.lastSeen,
                     isOfficial: user?.isOfficial,
                     user: user
                 )
@@ -815,13 +816,37 @@ final class MessagesService: MessagesServiceProtocol {
             } else if repFromId < 0, let g = groups.first(where: { $0.id == abs(repFromId) }) {
                 repSenderName = g.name ?? "Сообщество"
             }
+            let repDate = rep.date != nil ? Date(timeIntervalSince1970: TimeInterval(rep.date!)) : nil
             replyDomain = MessageReply(
                 id: rep.id ?? 0,
                 fromId: repFromId,
                 senderName: repSenderName,
                 text: rep.text ?? "",
-                attachments: self.mapAttachments(rep.attachments ?? [])
+                attachments: self.mapAttachments(rep.attachments ?? []),
+                date: repDate
             )
+        }
+
+        var fwdDomain: [MessageReply] = []
+        if let fwds = item.fwdMessages {
+            for f in fwds {
+                var fSenderName = "Сообщение"
+                let fFromId = f.fromId ?? 0
+                if fFromId > 0, let p = profiles.first(where: { $0.id == fFromId }) {
+                    fSenderName = "\(p.firstName ?? "") \(p.lastName ?? "")".trimmingCharacters(in: .whitespaces)
+                } else if fFromId < 0, let g = groups.first(where: { $0.id == abs(fFromId) }) {
+                    fSenderName = g.name ?? "Сообщество"
+                }
+                let fDate = f.date != nil ? Date(timeIntervalSince1970: TimeInterval(f.date!)) : nil
+                fwdDomain.append(MessageReply(
+                    id: f.id ?? 0,
+                    fromId: fFromId,
+                    senderName: fSenderName,
+                    text: f.text ?? "",
+                    attachments: self.mapAttachments(f.attachments ?? []),
+                    date: fDate
+                ))
+            }
         }
 
         return Message(
@@ -834,6 +859,7 @@ final class MessagesService: MessagesServiceProtocol {
             isRead: false,
             attachments: attachments,
             replyMessage: replyDomain,
+            forwardMessages: fwdDomain,
             isPinned: item.isPinned == true,
             isImportant: item.isImportant == true,
             isDeleted: item.isDeleted == true,
@@ -890,12 +916,31 @@ final class MessagesService: MessagesServiceProtocol {
                 }
             case "doc":
                 if let d = att.doc {
-                    result.append(.document(
-                        title: d.title ?? "Документ",
-                        ext: d.ext ?? "file",
-                        size: formatFileSize(d.size ?? 0),
-                        url: d.url ?? ""
-                    ))
+                    let extLower = (d.ext ?? "").lowercased()
+                    let isImageExt = ["jpg", "jpeg", "png", "webp", "heic"].contains(extLower)
+                    let previewUrl = d.preview?.photo?.sizes?.compactMap { $0.url ?? $0.src }.last(where: { !$0.isEmpty })
+                    let bestUrl = previewUrl ?? d.url ?? ""
+
+                    if extLower == "gif" && !bestUrl.isEmpty {
+                        result.append(.gif(title: d.title ?? "GIF", url: bestUrl))
+                    } else if isImageExt && !bestUrl.isEmpty {
+                        result.append(.remoteImage(
+                            url: bestUrl,
+                            id: d.id,
+                            ownerID: d.ownerId,
+                            likesCount: 0,
+                            commentsCount: 0,
+                            repostsCount: 0,
+                            isLiked: false
+                        ))
+                    } else {
+                        result.append(.document(
+                            title: d.title ?? "Документ",
+                            ext: d.ext ?? "file",
+                            size: formatFileSize(d.size ?? 0),
+                            url: d.url ?? ""
+                        ))
+                    }
                 }
             case "wall":
                 if let w = att.wall {
@@ -942,6 +987,13 @@ final class MessagesService: MessagesServiceProtocol {
 
     private func mapUserProfile(_ profile: VKUserProfile) -> User {
         let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")".trimmingCharacters(in: .whitespaces)
+        let lastSeenText: String? = {
+            if let time = profile.lastSeen?.time, time > 0 {
+                return Date(timeIntervalSince1970: time).openvkLastSeen(sex: profile.sex)
+            }
+            return nil
+        }()
+
         return User(
             uid: profile.id,
             username: profile.screenName ?? "id\(profile.id)",
@@ -949,6 +1001,7 @@ final class MessagesService: MessagesServiceProtocol {
             avatarURL: (profile.photo200 ?? profile.photo100).flatMap { URL(string: $0) },
             isOnline: profile.online == 1,
             onlinePlatform: profile.lastSeen?.platformName,
+            lastSeen: lastSeenText,
             isOfficial: profile.verified == 1
         )
     }
