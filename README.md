@@ -23,7 +23,7 @@ The rest of the project is built on native Apple frameworks (SwiftUI, UIKit, Com
 
 1. [VLCKit](https://code.videolan.org/videolan/VLCKit) (LGPL 2.1+) — video playback
 
-## OpenVK Refresh License
+## OpenVK for iOS License
 [GNU (Affero) GPL v3.0](https://github.com/openvk/mobile-ios/blob/main/COPYING) or later version.
 
 ## Links
