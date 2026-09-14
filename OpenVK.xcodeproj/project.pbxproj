@@ -88,7 +88,6 @@
 		2488A88298BDDC55AEF7B82E /* LoginFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24881F38C8D7447CB2F2462C /* LoginFormView.swift */; };
 		2488AA194E660D38BD67CB91 /* FeedViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24888882742F642283F665A4 /* FeedViewModel.swift */; };
 		2488AAC19CE492CC27AEE506 /* CommentRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24884CA38719CF84F41C5ED1 /* CommentRow.swift */; };
-		2488AD9C157D76BCB16E3B04 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488B4961DB0B136AFD9155F /* ChatView.swift */; };
 		2488AF05357151B45FA209A5 /* MessagesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24888AC860954B90AF2C932B /* MessagesViewModel.swift */; };
 		2488B46B14A5F8E3C9930FAA /* ProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248879D82E48D096160225A9 /* ProfileView.swift */; };
 		2488BCB0496CA10BFF96D8D0 /* PhotoAlbum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24884DC8C74BB072E5EDDAAE /* PhotoAlbum.swift */; };
@@ -114,7 +113,7 @@
 		2488FC559F6707D809BA39A7 /* BirthdaysViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24883ABFDC7128F285A146D1 /* BirthdaysViewModel.swift */; };
 		2488FD747049305177D4AFEB /* DocumentDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488D7438650E6E91862F68A /* DocumentDownloader.swift */; };
 		2488FF7AC7A7AFBCE0785271 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488A6E59ADA968DE459729A /* RootView.swift */; };
-		2488FFBAAAB4550A1E94A34B /* Message.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488F82379158D7742DEB8B1 /* Message.swift */; };
+		2488FFBAAAB4550A1E94A34B /* Conversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488F82379158D7742DEB8B1 /* Conversation.swift */; };
 		24A1000000000000000000B2 /* SupporterBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000B1 /* SupporterBadgeView.swift */; };
 		24A1000000000000000000C2 /* SupportersService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000C1 /* SupportersService.swift */; };
 		24A1000000000000000000D2 /* SupportersListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000D1 /* SupportersListView.swift */; };
@@ -223,7 +222,6 @@
 		2488A6E59ADA968DE459729A /* RootView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		2488B2B4107C9BD138F367C5 /* VideosListView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VideosListView.swift; sourceTree = "<group>"; };
 		2488B370B1AC57671C68C54C /* AlbumsListViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AlbumsListViewModel.swift; sourceTree = "<group>"; };
-		2488B4961DB0B136AFD9155F /* ChatView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		2488B5F4D29A4D60AF9A9007 /* AlbumDetailViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AlbumDetailViewModel.swift; sourceTree = "<group>"; };
 		2488B8B1F2A31D87955E2998 /* VideosListViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VideosListViewModel.swift; sourceTree = "<group>"; };
 		2488B98D4E7D8AE9B23B114E /* Birthday.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Birthday.swift; sourceTree = "<group>"; };
@@ -249,7 +247,7 @@
 		2488F00000000000000000A1 /* PlatformIconView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PlatformIconView.swift; sourceTree = "<group>"; };
 		2488F325B48124244B19A4AD /* RepostView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = RepostView.swift; sourceTree = "<group>"; };
 		2488F7F9A3280FF95DF9D445 /* Color+Extensions.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "Color+Extensions.swift"; sourceTree = "<group>"; };
-		2488F82379158D7742DEB8B1 /* Message.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Message.swift; sourceTree = "<group>"; };
+		2488F82379158D7742DEB8B1 /* Conversation.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Conversation.swift; sourceTree = "<group>"; };
 		2488FBC08488BD30BA0E5393 /* NotificationsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = NotificationsView.swift; sourceTree = "<group>"; };
 		24A1000000000000000000B1 /* SupporterBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupporterBadgeView.swift; sourceTree = "<group>"; };
 		24A1000000000000000000C1 /* SupportersService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportersService.swift; sourceTree = "<group>"; };
@@ -542,7 +540,7 @@
 				2488561ED47EE0CF6088F1CE /* Document.swift */,
 				248821CC0CE36A1625A69403 /* DocumentAppearance.swift */,
 				24883D2DDEA0F47CBA914ACD /* Group.swift */,
-				2488F82379158D7742DEB8B1 /* Message.swift */,
+				2488F82379158D7742DEB8B1 /* Conversation.swift */,
 				2488C9F1615C5E04E8182EF0 /* Notification.swift */,
 				24881D001C0009CE66AA420F /* Photo.swift */,
 				24884DC8C74BB072E5EDDAAE /* PhotoAlbum.swift */,
@@ -648,7 +646,6 @@
 		2488A7A8BEAED02D476D1B83 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				2488B4961DB0B136AFD9155F /* ChatView.swift */,
 				2488EF1996085864BAD0E827 /* ConversationRow.swift */,
 				248876F80B9AF9F0330F6D4E /* MessagesView.swift */,
 			);
@@ -955,7 +952,6 @@
 				2488A2C67E5B52BEEC584B52 /* Document.swift in Sources */,
 				24888947F61A36B648EC5F45 /* DocumentAppearance.swift in Sources */,
 				2488F9F0F7E4603066AB33E6 /* Group.swift in Sources */,
-				2488FFBAAAB4550A1E94A34B /* Message.swift in Sources */,
 				2488551989CA0BDFEDE5CD61 /* Notification.swift in Sources */,
 				248872845DB345DA232B8F9E /* Photo.swift in Sources */,
 				2488BCB0496CA10BFF96D8D0 /* PhotoAlbum.swift in Sources */,
@@ -987,10 +983,6 @@
 				248842FFD71526B565A4F88B /* PostDetailLoaderView.swift in Sources */,
 				24881F8023808C62F87B3945 /* PostDetailView.swift in Sources */,
 				2488618948A9581251324D42 /* RepostView.swift in Sources */,
-				2488AF05357151B45FA209A5 /* MessagesViewModel.swift in Sources */,
-				2488AD9C157D76BCB16E3B04 /* ChatView.swift in Sources */,
-				24882A81DAEFCF22EE104D51 /* ConversationRow.swift in Sources */,
-				248880FCE8843F35AADCD838 /* MessagesView.swift in Sources */,
 				24886B6135D24B413B984BC5 /* NewPostViewModel.swift in Sources */,
 				24884E7AA707D30954F62868 /* NewPostView.swift in Sources */,
 				2488766E7F5B7FA637333B8F /* AlbumDetailViewModel.swift in Sources */,
@@ -1039,6 +1031,10 @@
 				24882B1C5035DDF69BF75CAF /* Strings.swift in Sources */,
 				2488FF7AC7A7AFBCE0785271 /* RootView.swift in Sources */,
 				2488FA60551EE3EB8334C68B /* MainTabView.swift in Sources */,
+				2488FFBAAAB4550A1E94A34B /* Conversation.swift in Sources */,
+				2488AF05357151B45FA209A5 /* MessagesViewModel.swift in Sources */,
+				24882A81DAEFCF22EE104D51 /* ConversationRow.swift in Sources */,
+				248880FCE8843F35AADCD838 /* MessagesView.swift in Sources */,
 				24A1000000000000000000B2 /* SupporterBadgeView.swift in Sources */,
 				24A1000000000000000000C2 /* SupportersService.swift in Sources */,
 				24A1000000000000000000D2 /* SupportersListView.swift in Sources */,
@@ -1209,7 +1205,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = org.openvk.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = org.openvk.ios.nika;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_VERSION = 5.0;
@@ -1233,7 +1229,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = org.openvk.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = org.openvk.ios.nika;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_VERSION = 5.0;

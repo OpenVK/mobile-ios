@@ -104,6 +104,6 @@ enum NavigationTabType: String, Codable, CaseIterable {
     }
     
     var isMainTab: Bool {
-        return [.feed, .search, .messages, .other].contains(self)
+    return [.feed, .search, .messages, .other].contains(self)
     }
 }
