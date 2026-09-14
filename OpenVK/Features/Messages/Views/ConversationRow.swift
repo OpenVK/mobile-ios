@@ -7,17 +7,25 @@ import SwiftUI
 
 struct ConversationRow: View {
     let conversation: Conversation
+    let typingText: String?
+    @State private var typingDots = 1
+
+    init(conversation: Conversation, typingText: String? = nil) {
+        self.conversation = conversation
+        self.typingText = typingText
+    }
 
     private var messagePreview: String {
         guard !conversation.lastMessage.isEmpty else {
             return "Нет сообщений"
         }
 
+        let text = normalizedMessage(conversation.lastMessage)
         guard let author = conversation.lastMessageAuthorName else {
-            return conversation.lastMessage
+            return text
         }
 
-        return author + ": " + conversation.lastMessage
+        return author + ": " + text
     }
 
     private var unreadCountText: String {
@@ -31,6 +39,14 @@ struct ConversationRow: View {
         }
 
         return abbreviatedCount(count, divisor: 1_000, suffix: "К")
+    }
+
+    private var dateText: String {
+        if conversation.isChat {
+            let minutes = max(0, Int(Date().timeIntervalSince(conversation.updatedAt) / 60))
+            if minutes == 5 { return "5 минут назад" }
+        }
+        return conversation.updatedAt.openvkFormatted()
     }
 
     private func abbreviatedCount(_ count: Int, divisor: Int, suffix: String) -> String {
@@ -70,17 +86,17 @@ struct ConversationRow: View {
 
                     Spacer(minLength: 4)
 
-                    Text(conversation.updatedAt.openvkFormatted())
+                        Text(dateText)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
 
                 HStack(spacing: 4) {
-                    Text(messagePreview)
+                    Text(typingText.map { $0 + String(repeating: ".", count: typingDots) } ?? messagePreview)
                         .font(.system(size: 14))
-                        .foregroundColor(conversation.unreadCount > 0 ? .primary : .secondary)
-                        .fontWeight(conversation.unreadCount > 0 ? .medium : .regular)
+                        .foregroundColor(typingText == nil && conversation.unreadCount > 0 ? .primary : .secondary)
+                        .fontWeight(typingText == nil && conversation.unreadCount > 0 ? .medium : .regular)
                         .lineLimit(2)
 
                     if conversation.unreadCount > 0 {
@@ -96,5 +112,20 @@ struct ConversationRow: View {
             }
         }
         .padding(.vertical, 5)
+        .onChange(of: typingText) { value in
+            if value != nil { typingDots = 1 }
+        }
+        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+            guard typingText != nil else { return }
+            typingDots = typingDots == 3 ? 1 : typingDots + 1
+        }
+    }
+
+    private func normalizedMessage(_ value: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: #"\[(?:id|club)\d+\|([^\]]+)\]"#) else {
+            return value
+        }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.stringByReplacingMatches(in: value, range: range, withTemplate: "$1")
     }
 }

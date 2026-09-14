@@ -36,6 +36,20 @@ struct MessagesView: View {
         .refreshable {
             viewModel.load()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openvkLongPollDidReceiveEvent)) { notification in
+            let type = notification.userInfo?["type"] as? Int ?? -1
+            if type == 4 {
+                viewModel.load()
+                AuthService.shared.fetchCounters()
+            } else if (61...64).contains(type) {
+                viewModel.handleLongPollEvent(notification)
+            } else if [0, 5, 13, 14, 51, 52].contains(type) {
+                viewModel.load()
+                AuthService.shared.fetchCounters()
+            } else if type == 80 {
+                AuthService.shared.fetchCounters()
+            }
+        }
         .alert(
             "Не удалось загрузить диалоги",
             isPresented: Binding(
@@ -70,7 +84,10 @@ struct MessagesView: View {
         } else {
             List {
                 ForEach(viewModel.conversations) { conversation in
-                    ConversationRow(conversation: conversation)
+                    ConversationRow(
+                        conversation: conversation,
+                        typingText: viewModel.typingText(for: conversation)
+                    )
                         .contentShape(Rectangle())
                         .onAppear {
                             viewModel.loadMoreIfNeeded(after: conversation)

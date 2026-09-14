@@ -34,6 +34,23 @@ struct VKConversationsResponse: Decodable {
 struct VKConversationItem: Decodable {
     let conversation: VKConversationInfo
     let lastMessage: VKConversationMessage?
+
+    private enum CodingKeys: String, CodingKey {
+        case conversation
+        case lastMessage = "last_message"
+        case lastMessageCamel = "lastMessage"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let nested = try? container.decode(VKConversationInfo.self, forKey: .conversation) {
+            conversation = nested
+        } else {
+            conversation = try VKConversationInfo(from: decoder)
+        }
+        lastMessage = (try? container.decode(VKConversationMessage.self, forKey: .lastMessage))
+            ?? (try? container.decode(VKConversationMessage.self, forKey: .lastMessageCamel))
+    }
 }
 
 struct VKConversationInfo: Decodable {
@@ -60,4 +77,9 @@ struct VKConversationMessage: Decodable {
     let out: Int?
     let body: String?
     let text: String?
+    let attachments: [VKConversationAttachment]?
+}
+
+struct VKConversationAttachment: Decodable {
+    let type: String?
 }

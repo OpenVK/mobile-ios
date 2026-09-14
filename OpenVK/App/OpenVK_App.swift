@@ -7,8 +7,9 @@ import SwiftUI
 import UserNotifications
 import AVFoundation
 
-class AppDelegate: NSObject, UIApplicationDelegate {
+class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
         // todo из за того что мы вызываем при запуске AVAudio музыка на фоне останавливается
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
@@ -28,6 +29,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         return true
     }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound, .badge])
+    }
 }
 
 @main
@@ -44,6 +53,7 @@ struct OpenVKApp: App {
                     requestNotificationPermissions()
                     if auth.isAuthenticated {
                         OnlineService.shared.start()
+                        LongPollService.shared.start()
                     }
                 }
                 .onChange(of: scenePhase) { newPhase in
@@ -51,9 +61,11 @@ struct OpenVKApp: App {
                     case .active:
                         if auth.isAuthenticated {
                             OnlineService.shared.start()
+                            LongPollService.shared.resumeAfterBackground()
                         }
                     case .inactive, .background:
                         OnlineService.shared.stop()
+                        LongPollService.shared.prepareForBackground()
                     @unknown default:
                         break
                     }
@@ -61,8 +73,10 @@ struct OpenVKApp: App {
                 .onChange(of: auth.isAuthenticated) { isAuth in
                     if isAuth && scenePhase == .active {
                         OnlineService.shared.start()
+                        LongPollService.shared.start()
                     } else if !isAuth {
                         OnlineService.shared.stop()
+                        LongPollService.shared.stop()
                     }
                 }
         }
@@ -73,8 +87,12 @@ struct OpenVKApp: App {
             if granted {
                 print("Notification permissions granted.")
                 AuthService.shared.updateAppIconBadge()
-            } else if let error = error {
-                print("Error requesting notification permissions: \(error.localizedDescription)")
+            } else {
+                if let error {
+                    print("Error requesting notification permissions: \(error.localizedDescription)")
+                } else {
+                    print("Notification permissions are not granted.")
+                }
             }
         }
     }

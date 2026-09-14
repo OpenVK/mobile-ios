@@ -81,6 +81,7 @@
 		24889DD711E9D1F9B4891E80 /* FeedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24886D424E829CB11A219FAE /* FeedService.swift */; };
 		2488A1B2C3D4E5F600010002 /* OpenVKDateFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488A1B2C3D4E5F600010001 /* OpenVKDateFormatter.swift */; };
 		2488A1B2C3D4E5F600020002 /* OnlineService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488A1B2C3D4E5F600020001 /* OnlineService.swift */; };
+		24A1000000000000000000F2 /* LongPollService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000F1 /* LongPollService.swift */; };
 		2488A1F188236D23A1804070 /* DocumentsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488D9C70EBF5E5AB191DA31 /* DocumentsViewModel.swift */; };
 		2488A200E4699E83544F1192 /* TwoFactorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248802C0817AE7F50BFA7BA3 /* TwoFactorViewModel.swift */; };
 		2488A2C67E5B52BEEC584B52 /* Document.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488561ED47EE0CF6088F1CE /* Document.swift */; };
@@ -220,6 +221,7 @@
 		24889DC0ED7A29B2124EF520 /* NavigationPanelManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = NavigationPanelManager.swift; sourceTree = "<group>"; };
 		2488A1B2C3D4E5F600010001 /* OpenVKDateFormatter.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = OpenVKDateFormatter.swift; sourceTree = "<group>"; };
 		2488A1B2C3D4E5F600020001 /* OnlineService.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = OnlineService.swift; sourceTree = "<group>"; };
+		24A1000000000000000000F1 /* LongPollService.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LongPollService.swift; sourceTree = "<group>"; };
 		2488A4444D462C0877EF6316 /* NewPostViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = NewPostViewModel.swift; sourceTree = "<group>"; };
 		2488A4DCC374D81B2C055F48 /* TwoFactorHeaderView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TwoFactorHeaderView.swift; sourceTree = "<group>"; };
 		2488A6E59ADA968DE459729A /* RootView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -400,6 +402,7 @@
 		2488152D73AB0B840051203E /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				24A1000000000000000000F1 /* LongPollService.swift */,
 				2488E8096DCDB2B637C90A15 /* AuthService.swift */,
 				24888AA4CCB9DDB954F66700 /* BirthdaysService.swift */,
 				24889A70A020B3C1B0A2661F /* CacheService.swift */,
@@ -945,6 +948,7 @@
 				24884A35B9CAD2F4B2C2824A /* UserDefaults+Extensions.swift in Sources */,
 				248839B07748CEF1866062F8 /* View+Extensions.swift in Sources */,
 				2488A1B2C3D4E5F600020002 /* OnlineService.swift in Sources */,
+				24A1000000000000000000F2 /* LongPollService.swift in Sources */,
 				248862C2C6325B150375F088 /* APIClient.swift in Sources */,
 				2488F8BB4F6A65BBEE744612 /* APIError.swift in Sources */,
 				2488FD747049305177D4AFEB /* DocumentDownloader.swift in Sources */,

@@ -115,10 +115,11 @@ final class MessagesService: MessagesServiceProtocol {
             authorName = message == nil ? nil : peerUser.displayName
         }
 
+        let messageText = messagePreview(message)
         return Conversation(
             id: peer.id,
             peer: peerUser,
-            lastMessage: message?.body ?? message?.text ?? "",
+            lastMessage: messageText,
             lastMessageAuthorName: authorName,
             lastMessageOutgoing: message?.out == 1,
             updatedAt: timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : Date(),
@@ -126,6 +127,28 @@ final class MessagesService: MessagesServiceProtocol {
             lastMessageId: item.conversation.lastMessageId ?? message?.id ?? 0,
             isChat: isChat
         )
+    }
+
+    private func messagePreview(_ message: VKConversationMessage?) -> String {
+        let text = message?.body ?? message?.text ?? ""
+        if !text.isEmpty { return text }
+        guard let attachments = message?.attachments, !attachments.isEmpty else { return "" }
+
+        return attachments.map { attachment in
+            switch attachment.type?.lowercased() {
+            case "photo": return "[Фотография]"
+            case "video": return "[Видео]"
+            case "audio": return "[Аудиозапись]"
+            case "doc", "document": return "[Документ]"
+            case "wall": return "[Запись]"
+            case "market": return "[Товар]"
+            case "poll": return "[Опрос]"
+            case "sticker": return "[Стикер]"
+            case "gift": return "[Подарок]"
+            case "link": return "[Ссылка]"
+            default: return "[Вложение]"
+            }
+        }.joined(separator: " ")
     }
 
     private func messageAuthorName(
@@ -143,6 +166,11 @@ final class MessagesService: MessagesServiceProtocol {
 
         let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? profile.screenName : name
+        return firstNameOnly(name.isEmpty ? profile.screenName : name)
+    }
+
+    private func firstNameOnly(_ name: String?) -> String? {
+        guard let name, !name.isEmpty else { return nil }
+        return name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
     }
 }
