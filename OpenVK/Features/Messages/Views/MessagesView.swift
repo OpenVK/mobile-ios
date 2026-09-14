@@ -21,21 +21,11 @@ struct MessagesView: View {
                             Image(systemName: "plus")
                                 .font(.system(size: 16, weight: .semibold))
                         }
-                        .accessibilityLabel("Создать чат")
+                        .accessibilityLabel("Написать сообщение")
                     }
                 }
                 .sheet(isPresented: $showCreateChat) {
-                    NavigationView {
-                        UnderDevelopmentView(section: "Создание чата")
-                            .navigationTitle("Создать чат")
-                            .toolbar {
-                                ToolbarItem(placement: .navigationBarTrailing) {
-                                    Button("Готово") {
-                                        showCreateChat = false
-                                    }
-                                }
-                            }
-                    }
+                    CreateChatView()
                 }
         }
         .onAppear {
