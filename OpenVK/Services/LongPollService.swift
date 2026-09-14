@@ -5,7 +5,6 @@
 
 import Foundation
 import UIKit
-import UserNotifications
 
 extension Notification.Name {
     static let openvkLongPollDidReceiveEvent = Notification.Name("openvk.longPollDidReceiveEvent")
@@ -36,11 +35,6 @@ private struct LongPollServerResponse: Decodable {
         pts = try? FlexibleInt.decode(from: container, forKey: .pts)
         unreadCount = try? FlexibleInt.decode(from: container, forKey: .unreadCount)
     }
-}
-
-private struct NotificationPeerContext {
-    let title: String
-    let avatarURL: URL?
 }
 
 final class LongPollService {
@@ -217,182 +211,6 @@ final class LongPollService {
         #endif
         NotificationCenter.default.post(name: .openvkLongPollDidReceiveEvent, object: nil, userInfo: userInfo)
 
-        switch type {
-        case 0:
-            if let messageID = event.count > 1 ? event[1].intValue : nil {
-                removeLocalNotification(messageID: messageID)
-            } else {
-                removeAllMessageNotifications()
-            }
-        case 13:
-            removeAllMessageNotifications()
-        case 5:
-            guard let messageID = event.count > 1 ? event[1].intValue : nil else { return }
-            let message = event.count > 5 ? event[5].stringValue : ""
-            updateLocalNotification(messageID: messageID, message: message)
-        case 4:
-            let message = event.count > 5 ? event[5].stringValue : ""
-            let peerID = event.count > 3 ? event[3].intValue : nil
-            let messageID = event.count > 1 ? event[1].intValue : nil
-            scheduleLocalNotification(
-                messageID: messageID,
-                message: message,
-                peerID: peerID
-            )
-            Task { [weak self] in
-                let context = await self?.notificationContext(for: peerID)
-                await MainActor.run {
-                    guard let self, let context else { return }
-                    self.replaceLocalNotification(
-                        messageID: messageID,
-                        message: message,
-                        peerID: peerID,
-                        context: context
-                    )
-                }
-            }
-        default:
-            break
-        }
-    }
-
-    private func scheduleLocalNotification(
-        messageID: Int?,
-        message: String,
-        peerID: Int?,
-        context: NotificationPeerContext? = nil
-    ) {
-        guard UIApplication.shared.applicationState != .active else { return }
-
-        let content = UNMutableNotificationContent()
-        content.title = context?.title ?? "Новое сообщение"
-        content.body = message.isEmpty ? "Вам пришло новое сообщение" : message
-        content.sound = .default
-        content.threadIdentifier = peerID.map { "conversation-\($0)" } ?? "messages"
-
-        let identifier = notificationIdentifier(messageID: messageID)
-        Task {
-            if let avatarURL = context?.avatarURL,
-               let attachment = try? await makeAttachment(from: avatarURL) {
-                content.attachments = [attachment]
-            }
-            let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
-            UNUserNotificationCenter.current().add(request) { error in
-                #if DEBUG
-                if let error {
-                    print("[Notifications] failed to schedule: \(error.localizedDescription)")
-                } else {
-                    print("[Notifications] scheduled message notification")
-                }
-                #endif
-            }
-        }
-    }
-
-    private func updateLocalNotification(messageID: Int, message: String) {
-        guard UIApplication.shared.applicationState != .active else { return }
-        removeLocalNotification(messageID: messageID)
-        scheduleLocalNotification(messageID: messageID, message: message, peerID: nil)
-    }
-
-    private func replaceLocalNotification(
-        messageID: Int?,
-        message: String,
-        peerID: Int?,
-        context: NotificationPeerContext
-    ) {
-        guard UIApplication.shared.applicationState != .active else { return }
-        if let messageID {
-            removeLocalNotification(messageID: messageID)
-        }
-        scheduleLocalNotification(
-            messageID: messageID,
-            message: message,
-            peerID: peerID,
-            context: context
-        )
-    }
-
-    private func notificationContext(for peerID: Int?) async -> NotificationPeerContext? {
-        guard let peerID else { return nil }
-        if let conversation = await fetchConversation(peerID: peerID) {
-            return NotificationPeerContext(title: conversation.title, avatarURL: conversation.avatarURL)
-        }
-        return nil
-    }
-
-    private func fetchConversation(peerID: Int) async -> NotificationPeerContext? {
-        do {
-            let response = try await APIClient.shared.call(
-                method: "messages.getConversationsById",
-                parameters: [
-                    "peer_ids": String(peerID),
-                    "extended": "1",
-                    "fields": "screen_name,photo_100,photo_200,verified"
-                ],
-                httpMethod: "GET",
-                as: VKConversationsResponse.self
-            )
-            guard let item = response.items?.first else { return nil }
-            let peer = item.conversation.peer
-            if peer.type == "chat" || peer.id >= 2_000_000_000 {
-                let settings = item.conversation.chatSettings
-                return NotificationPeerContext(
-                    title: settings?.title?.isEmpty == false ? settings!.title! : "Беседа",
-                    avatarURL: settings?.photo100.flatMap(URL.init)
-                )
-            }
-            if peer.id < 0, let group = response.groups?.first(where: { $0.id == abs(peer.id) }) {
-                return NotificationPeerContext(
-                    title: group.name ?? "Сообщество",
-                    avatarURL: (group.photo200 ?? group.photo100).flatMap(URL.init)
-                )
-            }
-            if let profile = response.profiles?.first(where: { $0.id == abs(peer.id) }) {
-                let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                return NotificationPeerContext(
-                    title: name.isEmpty ? "Пользователь" : name,
-                    avatarURL: (profile.photo200 ?? profile.photo100).flatMap(URL.init)
-                )
-            }
-        } catch {
-            #if DEBUG
-            print("[Notifications] failed to load peer context: \(error.localizedDescription)")
-            #endif
-        }
-        return nil
-    }
-
-    private func makeAttachment(from url: URL) async throws -> UNNotificationAttachment {
-        let (data, _) = try await URLSession.shared.data(from: url)
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openvk-avatar-\(UUID().uuidString)")
-            .appendingPathExtension("jpg")
-        try data.write(to: fileURL, options: .atomic)
-        return try UNNotificationAttachment(identifier: UUID().uuidString, url: fileURL)
-    }
-
-    private func removeLocalNotification(messageID: Int) {
-        let identifier = notificationIdentifier(messageID: messageID)
-        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
-    }
-
-    private func removeAllMessageNotifications() {
-        let center = UNUserNotificationCenter.current()
-        center.getPendingNotificationRequests { requests in
-            let identifiers = requests.map(\.identifier).filter { $0.hasPrefix("openvk-message-") }
-            center.removePendingNotificationRequests(withIdentifiers: identifiers)
-        }
-        center.getDeliveredNotifications { notifications in
-            let identifiers = notifications.map(\.request.identifier).filter { $0.hasPrefix("openvk-message-") }
-            center.removeDeliveredNotifications(withIdentifiers: identifiers)
-        }
-    }
-
-    private func notificationIdentifier(messageID: Int?) -> String {
-        "openvk-message-\(messageID.map(String.init) ?? UUID().uuidString)"
     }
 
     private func endBackgroundTask() {

@@ -4,12 +4,10 @@
 //
 
 import SwiftUI
-import UserNotifications
 import AVFoundation
 
-class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-        UNUserNotificationCenter.current().delegate = self
         // todo из за того что мы вызываем при запуске AVAudio музыка на фоне останавливается
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
@@ -30,13 +28,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         return true
     }
 
-    func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
-    ) {
-        completionHandler([.banner, .sound, .badge])
-    }
 }
 
 @main
@@ -50,7 +41,6 @@ struct OpenVKApp: App {
             RootView()
                 .environmentObject(auth)
                 .onAppear {
-                    requestNotificationPermissions()
                     if auth.isAuthenticated {
                         OnlineService.shared.start()
                         LongPollService.shared.start()
@@ -82,18 +72,4 @@ struct OpenVKApp: App {
         }
     }
 
-    private func requestNotificationPermissions() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
-            if granted {
-                print("Notification permissions granted.")
-                AuthService.shared.updateAppIconBadge()
-            } else {
-                if let error {
-                    print("Error requesting notification permissions: \(error.localizedDescription)")
-                } else {
-                    print("Notification permissions are not granted.")
-                }
-            }
-        }
-    }
 }

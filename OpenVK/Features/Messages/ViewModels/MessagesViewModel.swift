@@ -151,7 +151,13 @@ final class MessagesViewModel: ObservableObject {
         guard let names = typingUsersByConversation[conversation.id], !names.isEmpty else { return nil }
         if names.count == 1 { return "\(names[0]) печатает" }
         if names.count == 2 { return "\(names[0]) и \(names[1]) печатают" }
-        return "\(names.count) человек печатает"
+        let count = names.count
+        let lastTwoDigits = count % 100
+        let lastDigit = count % 10
+        let noun = (11...14).contains(lastTwoDigits)
+            ? "человек"
+            : (2...4).contains(lastDigit) ? "человека" : "человек"
+        return "\(count) \(noun) печатают"
     }
 
     private func loadMore() {
