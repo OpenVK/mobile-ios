@@ -132,19 +132,7 @@ struct PhotoCollageView: View {
         Button(action: { onMediaTap?(attachment) }) {
             if case .remoteImage(let urlString, _, _, _, _, _, _) = attachment,
                let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity)
-                            .frame(maxHeight: 380)
-                            .cornerRadius(12)
-                            .contentShape(Rectangle())
-                    case .failure:
-                        ImageAttachmentView(systemName: "photo")
-                    case .empty:
+                CachedRemoteImage(url: url, contentMode: .fit) {
                         ZStack {
                             Color(.secondarySystemBackground)
                             ProgressView()
@@ -152,10 +140,11 @@ struct PhotoCollageView: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 200)
                         .cornerRadius(12)
-                    @unknown default:
-                        EmptyView()
-                    }
                 }
+                .frame(maxWidth: .infinity)
+                .frame(maxHeight: 380)
+                .cornerRadius(12)
+                .contentShape(Rectangle())
             } else if case .image(let sysName) = attachment {
                 ImageAttachmentView(systemName: sysName)
             } else {
@@ -350,24 +339,13 @@ struct CollageImageView: View {
                     switch attachment {
                     case .remoteImage(let urlString, _, _, _, _, _, _):
                         if let url = URL(string: urlString) {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image
-                                        .resizable()
-                                        .scaledToFill()
-                                        .frame(width: geo.size.width, height: geo.size.height)
-                                        .clipped()
-                                case .failure:
-                                    Image(systemName: "photo")
-                                        .font(.system(size: 24))
-                                        .foregroundColor(Color(.tertiaryLabel))
-                                case .empty:
-                                    ProgressView()
-                                @unknown default:
-                                    EmptyView()
-                                }
+                            CachedRemoteImage(url: url, contentMode: .fill) {
+                                Image(systemName: "photo")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(Color(.tertiaryLabel))
                             }
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
                         } else {
                             Image(systemName: "photo")
                                 .font(.system(size: 24))
@@ -396,19 +374,7 @@ struct RemoteImageAttachmentView: View {
     var body: some View {
         Group {
             if let targetUrl = URL(string: url) {
-                AsyncImage(url: targetUrl) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: .infinity)
-                            .frame(maxHeight: 400)
-                            .cornerRadius(12)
-                            .contentShape(Rectangle())
-                    case .failure:
-                        ImageAttachmentView(systemName: "photo")
-                    case .empty:
+                CachedRemoteImage(url: targetUrl, contentMode: .fit) {
                         ZStack {
                             Color(.secondarySystemBackground)
                             ProgressView()
@@ -416,10 +382,11 @@ struct RemoteImageAttachmentView: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 180)
                         .cornerRadius(12)
-                    @unknown default:
-                        EmptyView()
-                    }
                 }
+                .frame(maxWidth: .infinity)
+                .frame(maxHeight: 400)
+                .cornerRadius(12)
+                .contentShape(Rectangle())
             } else {
                 ImageAttachmentView(systemName: "photo")
             }
@@ -454,14 +421,10 @@ struct VideoAttachmentView: View {
     let imageURL: String?
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             ZStack {
                 if let urlString = imageURL, !urlString.isEmpty, let url = URL(string: urlString) {
-                    AsyncImage(url: url) { image in
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } placeholder: {
+                    CachedRemoteImage(url: url, contentMode: .fill) {
                         Color.black.opacity(0.85)
                     }
                 } else {
@@ -495,7 +458,12 @@ struct VideoAttachmentView: View {
                     .background(LinearGradient(gradient: Gradient(colors: [.clear, .black.opacity(0.6)]), startPoint: .top, endPoint: .bottom))
                 }
             }
-            
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 180)
+        .clipped()
+        .cornerRadius(12)
+        .overlay(alignment: .bottomTrailing) {
             Text(duration)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white)
@@ -505,10 +473,6 @@ struct VideoAttachmentView: View {
                 .cornerRadius(4)
                 .padding(8)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 180)
-        .clipped()
-        .cornerRadius(12)
         .contentShape(Rectangle())
     }
 }
@@ -2526,4 +2490,3 @@ struct GIFAttachmentView: View {
         }
     }
 }
-

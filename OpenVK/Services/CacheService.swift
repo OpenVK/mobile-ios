@@ -7,6 +7,87 @@
 
 import Foundation
 import UIKit
+import SwiftUI
+
+final class ImageCache {
+    static let shared = ImageCache()
+
+    private let cache = NSCache<NSURL, UIImage>()
+
+    private init() {
+        cache.countLimit = 300
+        cache.totalCostLimit = 100 * 1024 * 1024
+    }
+
+    func image(for url: URL) -> UIImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
+    func load(_ url: URL, completion: @escaping (UIImage?) -> Void) {
+        if let image = image(for: url) {
+            DispatchQueue.main.async {
+                completion(image)
+            }
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            let image: UIImage?
+            if let data, let decoded = UIImage(data: data) {
+                image = decoded
+                self?.cache.setObject(decoded, forKey: url as NSURL, cost: data.count)
+            } else {
+                image = nil
+            }
+
+            DispatchQueue.main.async {
+                completion(image)
+            }
+        }.resume()
+    }
+
+    func prefetch(_ urls: [URL]) {
+        for url in urls where image(for: url) == nil {
+            load(url) { _ in }
+        }
+    }
+}
+
+struct CachedRemoteImage<Placeholder: View>: View {
+    let url: URL
+    let contentMode: ContentMode
+    let placeholder: () -> Placeholder
+
+    @State private var image: UIImage?
+
+    init(
+        url: URL,
+        contentMode: ContentMode = .fit,
+        @ViewBuilder placeholder: @escaping () -> Placeholder
+    ) {
+        self.url = url
+        self.contentMode = contentMode
+        self.placeholder = placeholder
+    }
+
+    var body: some View {
+        Group {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: contentMode)
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: url) {
+            guard image == nil else { return }
+            ImageCache.shared.load(url) { loadedImage in
+                image = loadedImage
+            }
+        }
+    }
+}
 
 final class CacheService {
 

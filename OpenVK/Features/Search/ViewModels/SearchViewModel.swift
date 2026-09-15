@@ -291,6 +291,8 @@ final class SearchViewModel: ObservableObject {
             service.searchAll(query: currentQuery) { [weak self] results in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
+                    self.prefetchImages(in: results.posts)
+                    ImageCache.shared.prefetch(results.videos.compactMap(\.imageURL))
                     self.allResults = results
                     self.isLoading = false
                 }
@@ -332,6 +334,7 @@ final class SearchViewModel: ObservableObject {
             service.searchPosts(query: currentQuery, count: 30, startFrom: nil) { [weak self] fetched, nextToken in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
+                    self.prefetchImages(in: fetched)
                     self.posts = fetched
                     self.postsNextFrom = nextToken
                     self.isLoading = false
@@ -347,6 +350,7 @@ final class SearchViewModel: ObservableObject {
             ) { [weak self] fetched, total in
                 DispatchQueue.main.async {
                     guard let self = self else { return }
+                    ImageCache.shared.prefetch(fetched.compactMap(\.imageURL))
                     self.videos = fetched
                     self.totalVideosCount = total
                     self.isLoading = false
@@ -447,6 +451,7 @@ final class SearchViewModel: ObservableObject {
                     if fetched.isEmpty || nextToken == self.postsNextFrom {
                         self.postsNextFrom = nil
                     } else {
+                        self.prefetchImages(in: fetched)
                         let existingIds = Set(self.posts.map { $0.id })
                         let unique = fetched.filter { !existingIds.contains($0.id) }
                         self.posts.append(contentsOf: unique)
@@ -467,6 +472,7 @@ final class SearchViewModel: ObservableObject {
                     if fetched.isEmpty {
                         self.totalVideosCount = self.videos.count
                     } else {
+                        ImageCache.shared.prefetch(fetched.compactMap(\.imageURL))
                         let existingIds = Set(self.videos.map { $0.id })
                         let unique = fetched.filter { !existingIds.contains($0.id) }
                         self.videos.append(contentsOf: unique)
@@ -518,6 +524,22 @@ final class SearchViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func prefetchImages(in posts: [Post]) {
+        let urls = posts.flatMap { post in
+            post.attachments.compactMap { attachment -> URL? in
+                switch attachment {
+                case .remoteImage(let url, _, _, _, _, _, _):
+                    return URL(string: url)
+                case .remoteVideo(_, _, let imageURL, _, _, _, _, _, _, _, _):
+                    return URL(string: imageURL)
+                default:
+                    return nil
+                }
+            }
+        }
+        ImageCache.shared.prefetch(urls)
     }
 
     func refresh() async {
