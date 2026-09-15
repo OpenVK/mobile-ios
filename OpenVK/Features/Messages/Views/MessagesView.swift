@@ -84,14 +84,18 @@ struct MessagesView: View {
         } else {
             List {
                 ForEach(viewModel.conversations) { conversation in
-                    ConversationRow(
-                        conversation: conversation,
-                        typingText: viewModel.typingText(for: conversation)
-                    )
-                        .contentShape(Rectangle())
-                        .onAppear {
-                            viewModel.loadMoreIfNeeded(after: conversation)
-                        }
+                    NavigationLink {
+                        ChatView(conversation: conversation)
+                    } label: {
+                        ConversationRow(
+                            conversation: conversation,
+                            typingText: viewModel.typingText(for: conversation)
+                        )
+                    }
+                    .contentShape(Rectangle())
+                    .onAppear {
+                        viewModel.loadMoreIfNeeded(after: conversation)
+                    }
                 }
 
                 if viewModel.isLoadingMore {

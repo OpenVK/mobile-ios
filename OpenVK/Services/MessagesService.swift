@@ -7,6 +7,9 @@ import Foundation
 
 protocol MessagesServiceProtocol {
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
+    func fetchHistory(peerID: Int, offset: Int, count: Int, completion: @escaping (Result<MessagesPage, Error>) -> Void)
+    func sendMessage(peerID: Int, text: String, completion: @escaping (Result<Int, Error>) -> Void)
+    func markAsRead(peerID: Int)
 }
 
 final class MessagesService: MessagesServiceProtocol {
@@ -16,6 +19,37 @@ final class MessagesService: MessagesServiceProtocol {
 
     private init(client: APIClientProtocol = APIClient.shared) {
         self.client = client
+    }
+
+    func fetchHistory(peerID: Int, offset: Int = 0, count: Int = 40, completion: @escaping (Result<MessagesPage, Error>) -> Void) {
+        client.call(
+            method: "messages.getHistory",
+            parameters: ["peer_id": String(peerID), "offset": String(offset), "count": String(count), "extended": "1"],
+            httpMethod: "GET",
+            as: VKMessagesHistoryResponse.self
+        ) { result in
+            switch result {
+            case .success(let response):
+                let profiles = response.profiles ?? []
+                let messages = (response.items ?? []).map { ChatMessage(message: $0, profiles: profiles) }.reversed()
+                completion(.success(MessagesPage(count: response.count ?? messages.count, messages: Array(messages))))
+            case .failure(let error): completion(.failure(error))
+            }
+        }
+    }
+
+    func sendMessage(peerID: Int, text: String, completion: @escaping (Result<Int, Error>) -> Void) {
+        client.call(
+            method: "messages.send",
+            parameters: ["peer_id": String(peerID), "message": text, "random_id": String(Int.random(in: 1...Int.max))],
+            httpMethod: "POST",
+            as: Int.self,
+            completion: { result in completion(result.mapError { $0 as Error }) }
+        )
+    }
+
+    func markAsRead(peerID: Int) {
+        client.call(method: "messages.markAsRead", parameters: ["peer_id": String(peerID)], httpMethod: "POST", as: Int.self) { _ in }
     }
 
     func fetchConversations(
