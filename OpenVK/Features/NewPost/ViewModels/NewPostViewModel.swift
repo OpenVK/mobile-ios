@@ -77,34 +77,21 @@ final class NewPostViewModel: ObservableObject {
                 guard let self = self else { return }
                 switch serverResult {
                 case .success(let uploadUrl):
-                    let group = DispatchGroup()
-                    var attachments: [String] = Array(repeating: "", count: self.selectedPhotosData.count)
-                    var uploadError: Error? = nil
-                    
-                    for (index, photoData) in self.selectedPhotosData.enumerated() {
-                        group.enter()
-                        self.service.uploadPhotoToServer(urlString: uploadUrl, photoData: photoData, ownerID: self.ownerID) { result in
+                    self.uploadPhotosSequentially(
+                        self.selectedPhotosData,
+                        uploadURL: uploadUrl
+                    ) { result in
+                        DispatchQueue.main.async {
                             switch result {
-                            case .success(let attachment):
-                                attachments[index] = attachment
+                            case .success(let attachments):
+                                let joinedAttachments = attachments.joined(separator: ",")
+                                self.createPost(attachments: joinedAttachments, onCreated: onCreated)
                             case .failure(let error):
-                                print("Failed to upload photo at index \(index): \(error)")
-                                uploadError = error
+                                self.isSubmitting = false
+                                self.errorMessage = "Не удалось загрузить фотографию: \(error.localizedDescription)"
+                                self.showErrorAlert = true
                             }
-                            group.leave()
                         }
-                    }
-                    
-                    group.notify(queue: .main) {
-                        if let error = uploadError {
-                            self.isSubmitting = false
-                            self.errorMessage = "Не удалось загрузить фотографию: \(error.localizedDescription)"
-                            self.showErrorAlert = true
-                            return
-                        }
-                        
-                        let joinedAttachments = attachments.filter { !$0.isEmpty }.joined(separator: ",")
-                        self.createPost(attachments: joinedAttachments, onCreated: onCreated)
                     }
                 case .failure(let error):
                     print("Failed to get upload server: \(error)")
@@ -117,6 +104,44 @@ final class NewPostViewModel: ObservableObject {
             }
         } else {
             createPost(attachments: nil, onCreated: onCreated)
+        }
+    }
+
+
+    private func uploadPhotosSequentially(
+        _ photos: [Data],
+        uploadURL: String,
+        index: Int = 0,
+        attachments: [String] = [],
+        completion: @escaping (Result<[String], Error>) -> Void
+    ) {
+        guard index < photos.count else {
+            completion(.success(attachments))
+            return
+        }
+
+        service.uploadPhotoToServer(
+            urlString: uploadURL,
+            photoData: photos[index],
+            ownerID: ownerID
+        ) { [weak self] result in
+            guard let self = self else { return }
+
+            switch result {
+            case .success(let attachment):
+                var updatedAttachments = attachments
+                updatedAttachments.append(attachment)
+                self.uploadPhotosSequentially(
+                    photos,
+                    uploadURL: uploadURL,
+                    index: index + 1,
+                    attachments: updatedAttachments,
+                    completion: completion
+                )
+            case .failure(let error):
+                print("Failed to upload photo at index \(index): \(error)")
+                completion(.failure(error))
+            }
         }
     }
 

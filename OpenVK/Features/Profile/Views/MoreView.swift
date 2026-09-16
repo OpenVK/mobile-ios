@@ -98,7 +98,7 @@ struct MoreView: View {
                             .labelStyle(SettingsLabelStyle(iconColor: .red))
                     }
 
-                    Button(action: { activeAlert = .unavailable }) {
+                    NavigationLink(destination: AudioListView().environmentObject(auth)) {
                         Label("Аудиозаписи", systemImage: "music.note")
                             .labelStyle(SettingsLabelStyle(iconColor: .appAccent))
                     }

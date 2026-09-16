@@ -345,11 +345,12 @@ private struct NewPostTopBar: View {
     let onPublish: () -> Void
 
     private var isIOS26OrNewer: Bool {
+#if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             return true
-        } else {
-            return false
         }
+#endif
+        return false
     }
 
     var body: some View {

@@ -118,6 +118,8 @@
 		24A1000000000000000000B2 /* SupporterBadgeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000B1 /* SupporterBadgeView.swift */; };
 		24A1000000000000000000C2 /* SupportersService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000C1 /* SupportersService.swift */; };
 		24A1000000000000000000D2 /* SupportersListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000D1 /* SupportersListView.swift */; };
+		24B0F1000000000000000002 /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B0F1000000000000000001 /* AudioService.swift */; };
+		24B0F1000000000000000004 /* ITunesArtworkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B0F1000000000000000003 /* ITunesArtworkService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -254,6 +256,8 @@
 		24A1000000000000000000B1 /* SupporterBadgeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupporterBadgeView.swift; sourceTree = "<group>"; };
 		24A1000000000000000000C1 /* SupportersService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportersService.swift; sourceTree = "<group>"; };
 		24A1000000000000000000D1 /* SupportersListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupportersListView.swift; sourceTree = "<group>"; };
+		24B0F1000000000000000001 /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
+		24B0F1000000000000000003 /* ITunesArtworkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ITunesArtworkService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -410,6 +414,8 @@
 				248811D9CF61139CAA2FF6FF /* ProfileService.swift */,
 				24884EB0C96EA6F983392A6C /* ReportsService.swift */,
 				24885C9AAF0AF9425CF32BDF /* SearchService.swift */,
+				24B0F1000000000000000001 /* AudioService.swift */,
+				24B0F1000000000000000003 /* ITunesArtworkService.swift */,
 				24A1000000000000000000C1 /* SupportersService.swift */,
 			);
 			path = Services;
@@ -1031,6 +1037,8 @@
 				24888E3BF2A47CCF153FF86C /* ProfileService.swift in Sources */,
 				2488C3CF84895389CDE1A39A /* ReportsService.swift in Sources */,
 				248800B3C10710A55A06866E /* SearchService.swift in Sources */,
+				24B0F1000000000000000002 /* AudioService.swift in Sources */,
+				24B0F1000000000000000004 /* ITunesArtworkService.swift in Sources */,
 				248859E173A859EDEB4D2825 /* Avatar.swift in Sources */,
 				2488EEA23B761A889C7F093B /* BlurView.swift in Sources */,
 				24884D9FCA264790E35640C8 /* SectionSeparator.swift in Sources */,

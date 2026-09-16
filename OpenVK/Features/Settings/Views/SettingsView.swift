@@ -667,6 +667,11 @@ struct DataAndMemorySettingsView: View {
     @State private var cacheSize: String = "..."
     @State private var showClearCacheAlert = false
     @State private var cacheCleared = false
+    @State private var audioCacheSize: String = "..."
+    @State private var showClearAudioCacheDialog = false
+    @State private var audioCacheCleared = false
+    @State private var audioCacheLimit = AudioCacheService.shared.cacheLimit
+    @State private var crossfadeEnabled = AudioPlayerService.shared.crossfadeEnabled
 
     var body: some View {
         List {
@@ -714,6 +719,67 @@ struct DataAndMemorySettingsView: View {
                 .disabled(cacheCleared)
             }
 
+            Section(
+                header: Text("Аудиоплеер"),
+                footer: Text("При воспроизведении трек сохраняется в кэш. Плеер заранее подгружает предыдущий и следующий треки в очереди воспроизведения. При достижении лимита старые файлы удаляются автоматически.")
+            ) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.appAccent)
+                            .frame(width: 28, height: 28)
+                        Image(systemName: "music.note")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                    Text("Кэш аудиоплеера")
+                    Spacer()
+                    Text(audioCacheSize)
+                        .foregroundColor(.secondary)
+                }
+
+                Picker("Лимит кэша", selection: $audioCacheLimit) {
+                    ForEach(AudioCacheLimit.allCases) { limit in
+                        Text(limit.title).tag(limit)
+                    }
+                }
+                .onChange(of: audioCacheLimit) { newValue in
+                    AudioCacheService.shared.cacheLimit = newValue
+                    refreshAudioCacheSize()
+                }
+
+                Toggle(isOn: $crossfadeEnabled) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.appAccent)
+                                .frame(width: 28, height: 28)
+                            Image(systemName: "waveform")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white)
+                        }
+                        Text("Плавный переход")
+                    }
+                }
+                .onChange(of: crossfadeEnabled) { newValue in
+                    AudioPlayerService.shared.crossfadeEnabled = newValue
+                }
+
+                Button(role: .destructive) {
+                    showClearAudioCacheDialog = true
+                } label: {
+                    HStack {
+                        Label("Очистить кэш аудиоплеера", systemImage: "trash")
+                        Spacer()
+                        if audioCacheCleared {
+                            Image(systemName: "checkmark")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .disabled(audioCacheCleared)
+            }
+
             Section(footer: Text("Кэш хранит ответы API и изображения для ускорения работы приложения. Данные обновляются автоматически каждые 5 минут.")) {
                 EmptyView()
             }
@@ -723,6 +789,9 @@ struct DataAndMemorySettingsView: View {
         .customBackButton(title: "Настройки")
         .onAppear {
             refreshCacheSize()
+            audioCacheLimit = AudioCacheService.shared.cacheLimit
+            crossfadeEnabled = AudioPlayerService.shared.crossfadeEnabled
+            refreshAudioCacheSize()
         }
         .alert(isPresented: $showClearCacheAlert) {
             Alert(
@@ -738,6 +807,19 @@ struct DataAndMemorySettingsView: View {
                 secondaryButton: .cancel(Text("Отмена"))
             )
         }
+        .confirmationDialog("Очистить кэш аудиоплеера?", isPresented: $showClearAudioCacheDialog, titleVisibility: .visible) {
+            Button("Очистить", role: .destructive) {
+                AudioPlayerService.shared.stop()
+                AudioCacheService.shared.clear()
+                withAnimation {
+                    audioCacheCleared = true
+                    audioCacheSize = "0 байт"
+                }
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Будет освобождено примерно \(audioCacheSize). Текущая аудиозапись остановится.")
+        }
     }
 
     private func refreshCacheSize() {
@@ -745,6 +827,16 @@ struct DataAndMemorySettingsView: View {
             let size = CacheService.shared.totalCacheSizeString()
             DispatchQueue.main.async {
                 self.cacheSize = size
+            }
+        }
+    }
+
+    private func refreshAudioCacheSize() {
+        audioCacheCleared = false
+        DispatchQueue.global(qos: .utility).async {
+            let size = AudioCacheService.shared.totalCacheSizeString()
+            DispatchQueue.main.async {
+                self.audioCacheSize = size
             }
         }
     }

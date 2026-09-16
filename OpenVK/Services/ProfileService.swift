@@ -485,8 +485,9 @@ final class ProfileService: ProfileServiceProtocol {
                     } else {
                         localAttachments.append(.document(title: d.title ?? "Документ", ext: d.ext ?? "", size: formatSize(d.size ?? 0), url: d.url ?? ""))
                     }
-                } else if att.type == "audio", let a = att.audio {
-                    localAttachments.append(.audio(artist: a.artist ?? "", title: a.title ?? "", duration: formatDuration(a.duration ?? 0)))
+                } else if att.type == "audio", let a = att.audio,
+                          let track = a.playableTrack {
+                    localAttachments.append(.remoteAudio(track: track))
                 }
             }
         }

@@ -66,13 +66,26 @@ extension View {
     }
 }
 
-extension UINavigationController: UIGestureRecognizerDelegate {
+private final class NavigationPopGestureDelegate: NSObject, UIGestureRecognizerDelegate {
+    static let shared = NavigationPopGestureDelegate()
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        var responder: UIResponder? = gestureRecognizer.view
+
+        while let current = responder {
+            if let navigationController = current as? UINavigationController {
+                return navigationController.viewControllers.count > 1
+            }
+            responder = current.next
+        }
+
+        return true
+    }
+}
+
+extension UINavigationController {
     override open func viewDidLoad() {
         super.viewDidLoad()
-        interactivePopGestureRecognizer?.delegate = self
-    }
-
-    public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        return viewControllers.count > 1
+        interactivePopGestureRecognizer?.delegate = NavigationPopGestureDelegate.shared
     }
 }

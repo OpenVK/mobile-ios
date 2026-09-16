@@ -368,11 +368,13 @@ struct ChatView: View {
 }
 
 private func hideTabBar() {
+    AudioPlayerService.shared.isOverlayHidden = true
     guard let tabBar = findTabBar() else { return }
     tabBar.isHidden = true
 }
 
 private func showTabBar() {
+    AudioPlayerService.shared.isOverlayHidden = false
     guard let tabBar = findTabBar() else { return }
     tabBar.isHidden = false
 }

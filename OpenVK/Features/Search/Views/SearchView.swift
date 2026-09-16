@@ -14,7 +14,7 @@ struct SearchView: View {
     @Binding var owningPost: Post?
     
     @State private var selectedProfileUser: User? = nil
-    @State private var playingTrackId: UUID? = nil
+    @ObservedObject private var audioPlayer = AudioPlayerService.shared
     @State private var downloadingDocId: Int? = nil
 
     init(selectedMedia: Binding<Attachment?> = .constant(nil), owningPost: Binding<Post?> = .constant(nil)) {
@@ -385,7 +385,7 @@ struct SearchView: View {
                 sectionHeader(title: "Музыка", count: res.audios.count, category: .audios)
                 VStack(spacing: 0) {
                     ForEach(res.audios.prefix(3)) { track in
-                        audioRow(track)
+                        audioRow(track, queue: res.audios)
                         SectionSeparator()
                     }
                 }
@@ -535,7 +535,7 @@ struct SearchView: View {
     @ViewBuilder
     private var audiosFullListView: some View {
         ForEach(viewModel.audios) { track in
-            audioRow(track)
+            audioRow(track, queue: viewModel.audios)
                 .onAppear {
                     if track.id == viewModel.audios.last?.id {
                         viewModel.loadMore()
@@ -713,50 +713,56 @@ struct SearchView: View {
         .buttonStyle(PlainButtonStyle())
     }
 
-    private func audioRow(_ track: AudioTrack) -> some View {
-        let isPlaying = playingTrackId == track.id
-        return HStack(spacing: 12) {
-            Button(action: {
-                HapticManager.impact(.light)
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                    if playingTrackId == track.id {
-                        playingTrackId = nil
-                    } else {
-                        playingTrackId = track.id
+    private func audioRow(_ track: AudioTrack, queue: [AudioTrack]) -> some View {
+        let isCurrent = audioPlayer.currentTrack?.id == track.id
+        let isPlaying = isCurrent && audioPlayer.isPlaying
+        return Button(action: {
+            HapticManager.impact(.light)
+            if isCurrent {
+                audioPlayer.togglePlayPause()
+            } else {
+                audioPlayer.play(track: track, in: queue)
+            }
+        }) {
+            HStack(spacing: 12) {
+                ZStack {
+                    AudioArtworkView(track: track, cornerRadius: 8)
+
+                    if isCurrent && audioPlayer.isPreparing {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black.opacity(0.15))
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    } else if isPlaying {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black.opacity(0.15))
+                        AudioPauseBadge()
                     }
                 }
-            }) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(track.color)
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.white)
-                        .offset(x: isPlaying ? 0 : 1)
+                .frame(width: 46, height: 46)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(isCurrent ? .appAccent : .primary)
+                        .lineLimit(1)
+                    Text(track.artist)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
                 }
-                .frame(width: 44, height: 44)
-            }
-            .buttonStyle(PlainButtonStyle())
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(isPlaying ? .appAccent : .primary)
-                    .lineLimit(1)
-                Text(track.artist)
-                    .font(.system(size: 13))
+                Spacer()
+
+                Text(track.duration)
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundColor(.secondary)
-                    .lineLimit(1)
             }
-
-            Spacer()
-
-            Text(track.duration)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundColor(.secondary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .buttonStyle(PlainButtonStyle())
     }
 
     private func videoGridItem(_ video: Video, allVideos: [Video]) -> some View {

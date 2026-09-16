@@ -31,6 +31,20 @@ struct PostAttachmentsView: View {
         }
     }
 
+    private var playableAudioTracks: [AudioTrack] {
+        attachments.compactMap {
+            guard case .remoteAudio(let track) = $0 else { return nil }
+            return track
+        }
+    }
+
+    private func playbackQueue(startingWith track: AudioTrack) -> [AudioTrack] {
+        guard let index = playableAudioTracks.firstIndex(where: { $0.id == track.id }) else {
+            return [track]
+        }
+        return Array(playableAudioTracks[index...])
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !photoAttachments.isEmpty {
@@ -44,6 +58,8 @@ struct PostAttachmentsView: View {
                     GIFAttachmentView(title: title, url: url, onTap: {
                         onMediaTap?(attachment)
                     })
+                } else if case .remoteAudio(let track) = attachment {
+                    AudioTrackRow(track: track, queue: playbackQueue(startingWith: track))
                 } else {
                     Button(action: {
                         switch attachment {
@@ -83,6 +99,8 @@ struct PostAttachmentsView: View {
             GIFAttachmentView(title: title, url: url, onTap: {})
         case .audio(let artist, let title, let duration):
             AudioAttachmentView(artist: artist, title: title, duration: duration)
+        case .remoteAudio(let track):
+            AudioTrackRow(track: track, queue: playbackQueue(startingWith: track))
         case .note(let title, let content):
             NoteAttachmentView(title: title, content: content)
         case .place(let name, let address):

@@ -507,8 +507,9 @@ final class FeedService: FeedServiceProtocol {
                     } else {
                         localAttachments.append(.document(title: d.title ?? "Документ", ext: d.ext ?? "", size: formatSize(d.size ?? 0), url: d.url ?? ""))
                     }
-                } else if att.type == "audio", let a = att.audio {
-                    localAttachments.append(.audio(artist: a.artist ?? "", title: a.title ?? "", duration: formatDuration(a.duration ?? 0)))
+                } else if att.type == "audio", let a = att.audio,
+                          let track = a.playableTrack {
+                    localAttachments.append(.remoteAudio(track: track))
                 }
             }
         }
@@ -768,9 +769,70 @@ struct VKDocAttachment: Decodable {
 }
 
 struct VKAudioAttachment: Decodable {
+    let id: Int?
+    let aid: Int?
+    let ownerID: Int?
     let artist: String?
     let title: String?
     let duration: Int?
+    let url: String?
+    let added: Bool?
+    let ready: Bool?
+    let withdrawn: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, aid, artist, title, duration, url, added, ready, withdrawn
+        case ownerID = "owner_id"
+        case ownerIDCamel = "ownerId"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try? container.decode(Int.self, forKey: .id)
+        aid = try? container.decode(Int.self, forKey: .aid)
+        ownerID = (try? container.decode(Int.self, forKey: .ownerID))
+            ?? (try? container.decode(Int.self, forKey: .ownerIDCamel))
+        artist = try? container.decode(String.self, forKey: .artist)
+        title = try? container.decode(String.self, forKey: .title)
+        duration = try? container.decode(Int.self, forKey: .duration)
+        url = try? container.decode(String.self, forKey: .url)
+        added = Self.decodeBool(container, key: .added)
+        ready = Self.decodeBool(container, key: .ready)
+        withdrawn = Self.decodeBool(container, key: .withdrawn)
+    }
+
+    var playableTrack: AudioTrack? {
+        let seconds = max(0, duration ?? 0)
+        guard ready != false, withdrawn != true, seconds > 1 else {
+            return nil
+        }
+
+        let track = AudioTrack(
+            vkID: id ?? aid,
+            ownerID: ownerID,
+            title: title?.isEmpty == false ? title! : "Аудиозапись",
+            artist: artist?.isEmpty == false ? artist! : "Неизвестный исполнитель",
+            duration: String(format: "%d:%02d", seconds / 60, seconds % 60),
+            durationSeconds: seconds,
+            url: url,
+            artworkURL: nil,
+            systemName: "music.note"
+        )
+
+        if let added = added {
+            AudioLibraryMembership.shared.seed(track, added: added)
+        }
+        return track
+    }
+
+    private static func decodeBool(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Bool? {
+        if let value = try? container.decode(Bool.self, forKey: key) { return value }
+        if let value = try? container.decode(Int.self, forKey: key) { return value != 0 }
+        return nil
+    }
 }
 
 struct VKProfile: Decodable {

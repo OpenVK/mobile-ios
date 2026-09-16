@@ -20,6 +20,7 @@ enum Attachment: Hashable, Identifiable {
     case document(title: String, ext: String, size: String, url: String)
     case gif(title: String, url: String)
     case audio(artist: String, title: String, duration: String)
+    case remoteAudio(track: AudioTrack)
     case note(title: String, content: String)
     case place(name: String, address: String)
     case remoteImage(url: String, id: Int?, ownerID: Int?, likesCount: Int, commentsCount: Int, repostsCount: Int, isLiked: Bool)
@@ -33,6 +34,7 @@ enum Attachment: Hashable, Identifiable {
         case .document(let t, let ext, let s, let url): return "doc-\(t)-\(ext)-\(s)-\(url)"
         case .gif(let t, let url): return "gif-\(t)-\(url)"
         case .audio(let a, let t, let d): return "audio-\(a)-\(t)-\(d)"
+        case .remoteAudio(let track): return "remote-audio-\(track.id.uuidString)"
         case .note(let t, let c): return "note-\(t)-\(c.prefix(10))"
         case .place(let n, let ad): return "place-\(n)-\(ad)"
         case .remoteImage(let url, let pid, _, _, _, _, _): return "remote-image-\(pid ?? 0)-\(url)"

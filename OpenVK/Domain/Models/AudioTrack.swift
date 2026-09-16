@@ -16,6 +16,7 @@ struct AudioTrack: Identifiable, Hashable {
     let duration: String
     let durationSeconds: Int?
     let url: String?
+    let artworkURL: String?
     let color: Color
     let systemName: String
 
@@ -27,6 +28,7 @@ struct AudioTrack: Identifiable, Hashable {
          duration: String,
          durationSeconds: Int? = nil,
          url: String? = nil,
+         artworkURL: String? = nil,
          color: Color = .appAccent,
          systemName: String = "music.note") {
         self.id = id
@@ -37,6 +39,7 @@ struct AudioTrack: Identifiable, Hashable {
         self.duration = duration
         self.durationSeconds = durationSeconds
         self.url = url
+        self.artworkURL = artworkURL
         self.color = color
         self.systemName = systemName
     }

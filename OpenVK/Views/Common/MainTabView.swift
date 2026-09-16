@@ -13,6 +13,7 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .feed
     @State private var showNewPost = false
     @State private var topInset: CGFloat = 0
+    @State private var bottomInset: CGFloat = 0
     @State private var selectedMedia: Attachment? = nil
     @State private var owningPost: Post? = nil
 
@@ -68,9 +69,13 @@ struct MainTabView: View {
                     Color.clear
                         .onAppear {
                             topInset = geometry.safeAreaInsets.top
+                            bottomInset = geometry.safeAreaInsets.bottom
                         }
                         .onChange(of: geometry.safeAreaInsets.top) { newValue in
                             topInset = newValue
+                        }
+                        .onChange(of: geometry.safeAreaInsets.bottom) { newValue in
+                            bottomInset = newValue
                         }
                 }
             )
@@ -98,15 +103,33 @@ struct MainTabView: View {
                         }
                     }
                 )
+                .onAppear {
+                    pauseAudioIfNeeded(for: media)
+                }
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .scale(scale: 0.95)),
                     removal: .opacity.combined(with: .scale(scale: 0.95))
                 ))
                 .zIndex(100)
             }
+
+            if selectedMedia == nil {
+                GlobalAudioPlayerOverlay(bottomInset: bottomInset)
+                    .zIndex(200)
+            }
         }
         .onAppear {
             auth.fetchCounters()
+        }
+    }
+
+    private func pauseAudioIfNeeded(for media: Attachment) {
+        switch media {
+        case .video(_, _),
+             .remoteVideo(_, _, _, _, _, _, _, _, _, _, _):
+            AudioPlayerService.shared.pause()
+        default:
+            break
         }
     }
 }
