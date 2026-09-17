@@ -27,7 +27,7 @@ struct SettingsView: View {
                                     }
                                     SupporterBadgeView(screenName: currentUser.username)
                                 }
-                                if let instance = activeAccount?.instanceOption.displayName {
+                                if let instance = activeAccount?.instanceDisplayName {
                                     Text(instance)
                                         .font(.system(size: 12))
                                         .foregroundColor(.secondary)
@@ -68,7 +68,7 @@ struct SettingsView: View {
                                         }
                                         SupporterBadgeView(screenName: account.user.username)
                                     }
-                                    Text(account.instanceOption.displayName)
+                                    Text(account.instanceDisplayName)
                                         .font(.system(size: 12))
                                         .foregroundColor(.secondary)
                                 }
