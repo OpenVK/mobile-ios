@@ -11,10 +11,15 @@ import SwiftUI
 protocol ProfileServiceProtocol {
     func fetchProfile(username: String, completion: @escaping (Result<User, Error>) -> Void)
     func fetchWall(ownerID: Int, offset: Int, completion: @escaping (Result<[Post], Error>) -> Void)
-    func fetchPhotos(ownerID: Int, completion: @escaping (Result<[Photo], Error>) -> Void)
+    func fetchPhotos(ownerID: Int, completion: @escaping (Result<ProfilePhotosResult, Error>) -> Void)
     func fetchAlbums(ownerID: Int, completion: @escaping (Result<[PhotoAlbum], Error>) -> Void)
     func fetchAlbumPhotos(ownerID: Int, albumID: Int, completion: @escaping (Result<[Photo], Error>) -> Void)
     func fetchVideos(ownerID: Int, completion: @escaping (Result<[Video], Error>) -> Void)
+}
+
+struct ProfilePhotosResult {
+    let photos: [Photo]
+    let totalCount: Int
 }
 
 final class ProfileService: ProfileServiceProtocol {
@@ -207,12 +212,17 @@ final class ProfileService: ProfileServiceProtocol {
         }
     }
 
-    func fetchPhotos(ownerID: Int, completion: @escaping (Result<[Photo], Error>) -> Void) {
+    func fetchPhotos(ownerID: Int, completion: @escaping (Result<ProfilePhotosResult, Error>) -> Void) {
+        fetchPhotosPage(ownerID: ownerID, offset: 0, count: 6, completion: completion)
+    }
+
+    func fetchPhotosPage(ownerID: Int, offset: Int, count: Int, completion: @escaping (Result<ProfilePhotosResult, Error>) -> Void) {
         APIClient.shared.call(
             method: "photos.getAll",
             parameters: [
                 "owner_id": "\(ownerID)",
-                "count": "24",
+                "offset": "\(offset)",
+                "count": "\(count)",
                 "photo_sizes": "1"
             ],
             httpMethod: "GET",
@@ -222,18 +232,26 @@ final class ProfileService: ProfileServiceProtocol {
             case .success(let response):
                 let items = response.items ?? []
                 let mapped = items.map { item -> Photo in
-                    let urlStr = item.sizes?.array.first(where: { $0.type == "z" || $0.type == "y" || $0.type == "x" })?.url 
-                        ?? item.sizes?.array.last?.url 
-                        ?? item.sizes?.array.first?.url 
+                    let urlStr = item.sizes?.array.first(where: { $0.type == "z" || $0.type == "y" || $0.type == "x" })?.url
+                        ?? item.sizes?.array.last?.url
+                        ?? item.sizes?.array.first?.url
                         ?? item.sizes?.array.first?.src
-                    let url = self.forceHTTPS(urlStr)
                     return Photo(
-                        imageURL: url,
+                        vkID: item.id,
+                        ownerID: item.ownerId,
+                        imageURL: self.forceHTTPS(urlStr),
                         systemName: "photo",
-                        color: .clear
+                        color: .clear,
+                        likesCount: item.likes?.count ?? 0,
+                        commentsCount: item.comments?.count ?? 0,
+                        repostsCount: item.reposts?.count ?? 0,
+                        isLiked: (item.likes?.userLikes ?? 0) == 1
                     )
                 }
-                completion(.success(mapped))
+                completion(.success(ProfilePhotosResult(
+                    photos: mapped,
+                    totalCount: response.count ?? mapped.count
+                )))
             case .failure(let error):
                 completion(.failure(error))
             }

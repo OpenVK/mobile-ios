@@ -73,8 +73,8 @@ final class ProfileViewModel: ObservableObject {
         group.enter()
         service.fetchPhotos(ownerID: ownerID) { [weak self] result in
             if case .success(let fetchedPhotos) = result {
-                self?.photos = fetchedPhotos
-                self?.photoCount = fetchedPhotos.count
+                self?.photos = fetchedPhotos.photos
+                self?.photoCount = fetchedPhotos.totalCount
             }
             group.leave()
         }

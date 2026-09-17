@@ -734,6 +734,7 @@ struct MediaFullScreenViewer: View {
     @State private var selectedQuality: String = "Auto"
     @State private var currentAttachments: [Attachment] = []
     @State private var showCommentsSheet = false
+    @State private var isLoadingProfilePhotos = false
 
     init(post: Post, attachments: [Attachment], initialSelectedIndex: Int, onLikeToggle: @escaping () -> Void, onCommentTap: @escaping () -> Void, onDismiss: @escaping () -> Void) {
         self.post = post
@@ -761,9 +762,11 @@ struct MediaFullScreenViewer: View {
             .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
             .onChange(of: selectedIndex) { newIndex in
                 updateSelectedQualityForCurrentMedia()
+                loadMoreProfilePhotosIfNeeded(near: newIndex)
             }
             .onAppear {
                 updateSelectedQualityForCurrentMedia()
+                loadMoreProfilePhotosIfNeeded(near: selectedIndex)
             }
             
             VStack {
@@ -785,6 +788,46 @@ struct MediaFullScreenViewer: View {
                 Text("Комментарии недоступны для этого вложения")
                     .foregroundColor(.secondary)
                     .padding()
+            }
+        }
+    }
+
+    private func loadMoreProfilePhotosIfNeeded(near index: Int) {
+        guard post.text.isEmpty,
+              post.timeAgo.isEmpty,
+              let ownerID = post.author.uid,
+              let totalCount = post.author.photoCount,
+              totalCount > currentAttachments.count,
+              index >= currentAttachments.count - 2,
+              !isLoadingProfilePhotos else { return }
+
+        isLoadingProfilePhotos = true
+        ProfileService.shared.fetchPhotosPage(
+            ownerID: ownerID,
+            offset: currentAttachments.count,
+            count: 10
+        ) { result in
+            DispatchQueue.main.async {
+                isLoadingProfilePhotos = false
+                guard case .success(let page) = result else { return }
+
+                let newAttachments = page.photos.map { photo -> Attachment in
+                    if let url = photo.imageURL {
+                        return .remoteImage(
+                            url: url.absoluteString,
+                            id: photo.vkID,
+                            ownerID: photo.ownerID,
+                            likesCount: photo.likesCount,
+                            commentsCount: photo.commentsCount,
+                            repostsCount: photo.repostsCount,
+                            isLiked: photo.isLiked
+                        )
+                    }
+                    return .image(systemName: photo.systemName)
+                }
+
+                guard !newAttachments.isEmpty else { return }
+                currentAttachments.append(contentsOf: newAttachments)
             }
         }
     }
@@ -952,7 +995,7 @@ struct MediaFullScreenViewer: View {
                 }
                 Spacer()
                 
-                Text("\(selectedIndex + 1) из \(currentAttachments.count)")
+                Text("\(selectedIndex + 1) из \(post.author.photoCount ?? currentAttachments.count)")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.gray)
             }
