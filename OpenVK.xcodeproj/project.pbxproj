@@ -53,6 +53,7 @@
 		2488618948A9581251324D42 /* RepostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488F325B48124244B19A4AD /* RepostView.swift */; };
 		248862C2C6325B150375F088 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24881486DE49190386E59D40 /* APIClient.swift */; };
 		24886673B70E755965FC8BC1 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488E8096DCDB2B637C90A15 /* AuthService.swift */; };
+		24A1000000000000000000E1 /* AvatarRefreshService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000E0 /* AvatarRefreshService.swift */; };
 		248869988176C0B2644686E2 /* LoginActionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488462D353516D5CD017684 /* LoginActionsView.swift */; };
 		24886A321471F9102404087B /* DocumentsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24887F6258BA600BAC9FB59B /* DocumentsService.swift */; };
 		24886B6135D24B413B984BC5 /* NewPostViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488A4444D462C0877EF6316 /* NewPostViewModel.swift */; };
@@ -242,6 +243,7 @@
 		2488E16030976E298F19CF71 /* SearchViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SearchViewModel.swift; sourceTree = "<group>"; };
 		2488E5B369AA98B8B58F5D21 /* MessagesService.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MessagesService.swift; sourceTree = "<group>"; };
 		2488E8096DCDB2B637C90A15 /* AuthService.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		24A1000000000000000000E0 /* AvatarRefreshService.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AvatarRefreshService.swift; sourceTree = "<group>"; };
 		2488E9AF84AACE93D2C7A3EE /* UserDefaults+Extensions.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "UserDefaults+Extensions.swift"; sourceTree = "<group>"; };
 		2488EAF352466A8672BCAEDC /* Strings.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Strings.swift; sourceTree = "<group>"; };
 		2488EB1D8BBAEE6014D3AB43 /* View+Extensions.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "View+Extensions.swift"; sourceTree = "<group>"; };
@@ -399,6 +401,7 @@
 			isa = PBXGroup;
 			children = (
 				2488E8096DCDB2B637C90A15 /* AuthService.swift */,
+				24A1000000000000000000E0 /* AvatarRefreshService.swift */,
 				24888AA4CCB9DDB954F66700 /* BirthdaysService.swift */,
 				24889A70A020B3C1B0A2661F /* CacheService.swift */,
 				24882E5987403A399652B0CE /* CommentsService.swift */,
@@ -1021,6 +1024,7 @@
 				2488E14F93D33966F690E885 /* NavigationPanelItem.swift in Sources */,
 				248800371806ECA5F4832FA4 /* NavigationPanelManager.swift in Sources */,
 				24886673B70E755965FC8BC1 /* AuthService.swift in Sources */,
+				24A1000000000000000000E1 /* AvatarRefreshService.swift in Sources */,
 				248817B624086F81423B1163 /* BirthdaysService.swift in Sources */,
 				24881A583474AE47BFC4AB40 /* CacheService.swift in Sources */,
 				24883AAA16782DB1B702DA53 /* CommentsService.swift in Sources */,

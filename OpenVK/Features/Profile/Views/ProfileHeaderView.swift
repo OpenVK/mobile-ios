@@ -8,6 +8,7 @@ import SwiftUI
 struct ProfileHeaderView: View {
 
     let user: User
+    let avatarRefreshToken: UUID
     @State private var isFriendLocal: Bool = false
 
     var isCurrentUser: Bool {
@@ -24,7 +25,11 @@ struct ProfileHeaderView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 16) {
-                Avatar(user: user, size: 76)
+                Avatar(
+                    user: user,
+                    size: 76,
+                    refreshToken: avatarRefreshToken
+                )
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {

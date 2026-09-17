@@ -60,9 +60,7 @@ final class FeedViewModel: ObservableObject {
     }
 
     func load() {
-        if posts.isEmpty {
-            refresh()
-        }
+        refresh(clearPosts: posts.isEmpty)
     }
 
     func refreshAsync(clearPosts: Bool = false) async {

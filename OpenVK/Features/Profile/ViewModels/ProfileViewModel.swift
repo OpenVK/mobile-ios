@@ -11,6 +11,7 @@ final class ProfileViewModel: ObservableObject {
     @Published private(set) var wall: [Post] = []
     @Published private(set) var photos: [Photo] = []
     @Published private(set) var photoCount: Int = 0
+    @Published private(set) var avatarRefreshToken = UUID()
     @Published var isLoading: Bool = false
     @Published var isLoadingMoreWall: Bool = false
     @Published var errorMessage: String? = nil
@@ -37,6 +38,8 @@ final class ProfileViewModel: ObservableObject {
             switch result {
             case .success(let fetchedUser):
                 self.user = fetchedUser
+                self.avatarRefreshToken = UUID()
+                AuthService.shared.updateCurrentUserIfNeeded(fetchedUser)
                 
                 if let ownerID = fetchedUser.uid,
                    fetchedUser.accessStatus == .active {

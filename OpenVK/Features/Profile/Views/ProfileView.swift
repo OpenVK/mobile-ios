@@ -27,7 +27,10 @@ struct ProfileView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
 
-                ProfileHeaderView(user: viewModel.user)
+                ProfileHeaderView(
+                    user: viewModel.user,
+                    avatarRefreshToken: viewModel.avatarRefreshToken
+                )
 
                 switch viewModel.user.accessStatus {
                 case .deleted, .banned, .blacklistedByThem, .blacklistedByMe, .privateProfile:

@@ -140,43 +140,23 @@ final class APIClient: APIClientProtocol {
         as type: T.Type,
         completion: @escaping (Result<T, APIError>) -> Void
     ) {
-        if let cachedData = CacheService.shared.cachedData(for: cacheKey),
-           let container = try? decoder.decode(VKResponseContainer<T>.self, from: cachedData),
-           let responseObj = container.response {
-            DispatchQueue.main.async { completion(.success(responseObj)) }
-            return
-        }
-
         Task {
             do {
                 let request = try buildRequest(method: method, parameters: parameters, httpMethod: httpMethod)
                 let (data, response) = try await session.data(for: request)
-                guard let http = response as? HTTPURLResponse else {
-                    await MainActor.run { completion(.failure(.invalidResponse)) }
-                    return
-                }
-                if let container = try? decoder.decode(VKResponseContainer<T>.self, from: data) {
-                    if let obj = container.response {
-                        CacheService.shared.cache(data: data, for: cacheKey)
-                        await MainActor.run { completion(.success(obj)) }
-                        return
-                    } else if let vkError = container.error {
-                        if vkError.errorCode == 5 {
-                            await MainActor.run { AuthService.shared.signOut() }
-                        }
-                        await MainActor.run { completion(.failure(.vk(code: vkError.errorCode, message: vkError.errorMsg))) }
-                        return
-                    }
-                }
-                guard (200..<300).contains(http.statusCode) else {
-                    await MainActor.run { completion(.failure(.http(http.statusCode))) }
-                    return
-                }
-                await MainActor.run { completion(.failure(.invalidResponse)) }
-            } catch let error as APIError {
-                await MainActor.run { completion(.failure(error)) }
+                let result: T = try await decode(data: data, response: response, method: method)
+                ConnectionStatusService.shared.recordServerSuccess()
+                CacheService.shared.cache(data: data, for: cacheKey)
+                await MainActor.run { completion(.success(result)) }
             } catch {
-                await MainActor.run { completion(.failure(.transport(error))) }
+                let apiError = (error as? APIError) ?? APIError.transport(error)
+                reportConnectionState(for: apiError)
+                if shouldUseOfflineFallback(for: apiError),
+                   let cached: T = cachedResponse(for: cacheKey, as: type) {
+                    await MainActor.run { completion(.success(cached)) }
+                } else {
+                    await MainActor.run { completion(.failure(apiError)) }
+                }
             }
         }
     }
@@ -240,6 +220,7 @@ final class APIClient: APIClientProtocol {
 
         var request = URLRequest(url: requestURL)
         request.httpMethod = httpMethod
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("okhttp/4.12.0", forHTTPHeaderField: "User-Agent")
 
@@ -262,8 +243,22 @@ final class APIClient: APIClientProtocol {
     }
 
     private func perform<T: Decodable>(request: URLRequest, method: String) async throws -> T {
-        let (data, response) = try await session.data(for: request)
+        do {
+            let (data, response) = try await session.data(for: request)
+            let result: T = try await decode(data: data, response: response, method: method)
+            ConnectionStatusService.shared.recordServerSuccess()
+            return result
+        } catch {
+            if let apiError = error as? APIError {
+                reportConnectionState(for: apiError)
+            } else {
+                ConnectionStatusService.shared.recordServerFailure()
+            }
+            throw error
+        }
+    }
 
+    private func decode<T: Decodable>(data: Data, response: URLResponse, method: String) async throws -> T {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
@@ -305,6 +300,33 @@ final class APIClient: APIClientProtocol {
             print("OpenVK API Decoding Error (\(method)): \(error)")
             #endif
             throw APIError.decoding(error)
+        }
+    }
+
+    private func cachedResponse<T: Decodable>(for key: String, as type: T.Type) -> T? {
+        guard let data = CacheService.shared.cachedData(for: key),
+              let container = try? decoder.decode(VKResponseContainer<T>.self, from: data) else {
+            return nil
+        }
+        return container.response
+    }
+
+    private func shouldUseOfflineFallback(for error: APIError) -> Bool {
+        switch error {
+        case .transport:
+            return true
+        case .http(let statusCode):
+            return (500...599).contains(statusCode)
+        case .invalidURL, .invalidResponse, .decoding, .vk:
+            return false
+        }
+    }
+
+    private func reportConnectionState(for error: APIError) {
+        if shouldUseOfflineFallback(for: error) {
+            ConnectionStatusService.shared.recordServerFailure()
+        } else {
+            ConnectionStatusService.shared.recordServerSuccess()
         }
     }
 

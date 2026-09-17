@@ -42,29 +42,25 @@ struct OpenVKApp: App {
                 .environmentObject(auth)
                 .onAppear {
                     requestNotificationPermissions()
-                    if auth.isAuthenticated {
-                        OnlineService.shared.start()
-                    }
+                    updateBackgroundServices()
                 }
-                .onChange(of: scenePhase) { newPhase in
-                    switch newPhase {
-                    case .active:
-                        if auth.isAuthenticated {
-                            OnlineService.shared.start()
-                        }
-                    case .inactive, .background:
-                        OnlineService.shared.stop()
-                    @unknown default:
-                        break
-                    }
+                .onChange(of: scenePhase) { _ in
+                    updateBackgroundServices()
                 }
-                .onChange(of: auth.isAuthenticated) { isAuth in
-                    if isAuth && scenePhase == .active {
-                        OnlineService.shared.start()
-                    } else if !isAuth {
-                        OnlineService.shared.stop()
-                    }
+                .onChange(of: auth.isAuthenticated) { _ in
+                    updateBackgroundServices()
                 }
+        }
+    }
+
+    private func updateBackgroundServices() {
+        let shouldRun = auth.isAuthenticated && scenePhase == .active
+        if shouldRun {
+            OnlineService.shared.start()
+            AvatarRefreshService.shared.start()
+        } else {
+            OnlineService.shared.stop()
+            AvatarRefreshService.shared.stop()
         }
     }
 
