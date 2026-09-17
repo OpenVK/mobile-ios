@@ -7,17 +7,30 @@
 
 import SwiftUI
 
+private struct OpaqueSheetBackground: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content.presentationBackground(Color(.systemBackground))
+        } else {
+            content
+        }
+    }
+}
+
 struct HalfSheet: ViewModifier {
     var compact: Bool = false
+    var fixed: Bool = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 16.0, *) {
             content
-                .presentationDetents(compact ? [.height(300), .medium, .large] : [.medium, .large])
-                .presentationDragIndicator(.visible)
+                .presentationDetents(fixed ? [.height(180)] : (compact ? [.height(180), .medium, .large] : [.medium, .large]))
+                .presentationDragIndicator(fixed ? .hidden : .visible)
+                .modifier(OpaqueSheetBackground())
         } else if #available(iOS 15.0, *) {
-            content.background(SheetDetentsConfigurator())
+            content.background(SheetDetentsConfigurator(fixed: fixed))
         } else {
             content
         }
@@ -26,6 +39,12 @@ struct HalfSheet: ViewModifier {
 
 @available(iOS 15.0, *)
 struct SheetDetentsConfigurator: UIViewRepresentable {
+    let fixed: Bool
+
+    init(fixed: Bool = false) {
+        self.fixed = fixed
+    }
+
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.isHidden = true
@@ -35,8 +54,8 @@ struct SheetDetentsConfigurator: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         DispatchQueue.main.async {
             guard let sheet = uiView.nearestSheetPresentationController else { return }
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
+            sheet.detents = fixed ? [.medium()] : [.medium(), .large()]
+            sheet.prefersGrabberVisible = !fixed
         }
     }
 }
@@ -145,9 +164,14 @@ struct RepostView: View {
                     Divider()
                 }
 
+                if mode == .myWall {
+                    Spacer(minLength: 0)
+                }
+
                 messageInput
                 actionRow
             }
+            .background(Color(.systemBackground))
             .navigationBarTitle("Поделиться", displayMode: .inline)
             .navigationBarItems(
                 leading: Button("Отмена") {
@@ -166,7 +190,7 @@ struct RepostView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
-        .modifier(HalfSheet(compact: mode == .myWall))
+        .modifier(HalfSheet(compact: mode == .myWall, fixed: mode == .myWall))
         .onAppear {
             loadChats()
             loadAdminGroups()
