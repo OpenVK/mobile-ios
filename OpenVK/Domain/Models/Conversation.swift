@@ -158,6 +158,42 @@ struct VKHistoryMessage: Decodable {
     let attachments: [VKConversationAttachment]?
     let deleted: Int?
     let readState: Int?
+    let action: VKMessageAction?
+    let actionMid: Int?
+}
+
+struct VKMessageAction: Decodable {
+    let type: String?
+    let memberId: Int?
+    let text: String?
+    let memberName: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case memberId = "member_id"
+        case memberIdCamel = "memberId"
+        case text
+        case memberName = "member_name"
+        case memberNameCamel = "memberName"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        type = try? container.decode(String.self, forKey: .type)
+        text = try? container.decode(String.self, forKey: .text)
+        memberName = (try? container.decode(String.self, forKey: .memberName))
+            ?? (try? container.decode(String.self, forKey: .memberNameCamel))
+        memberId = Self.decodeID(from: container, key: .memberId)
+            ?? Self.decodeID(from: container, key: .memberIdCamel)
+    }
+
+    private static func decodeID(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Int? {
+        (try? container.decode(Int.self, forKey: key))
+            ?? (try? container.decode(String.self, forKey: key)).flatMap(Int.init)
+    }
 }
 
 struct MessagesPage {
@@ -176,6 +212,7 @@ struct ChatMessage: Identifiable, Hashable {
     let attachmentTypes: [String]
     let stickerURL: URL?
     let photos: [ChatPhoto]
+    let systemEventText: String?
     let isDeleted: Bool
     let deliveryStatus: MessageDeliveryStatus?
 
@@ -192,11 +229,20 @@ struct ChatMessage: Identifiable, Hashable {
         isOutgoing = message.out == 1 || senderID == AuthService.shared.currentUser?.uid
         self.senderID = senderID
         let profile = profiles.first(where: { $0.id == abs(senderID) })
-        let name = [profile?.firstName, profile?.lastName].compactMap { $0 }.joined(separator: " ")
+        let name = [profile?.firstName, profile?.lastName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
         senderName = name.isEmpty ? nil : name
         senderAvatarURL = (profile?.photo200 ?? profile?.photo100).flatMap(URL.init)
         attachmentTypes = attachments.compactMap(\.type)
         self.photos = photos
+        systemEventText = Self.systemEventText(
+            action: message.action,
+            actionMemberID: message.actionMid,
+            actorName: name.isEmpty ? "Пользователь" : name,
+            profiles: profiles
+        )
         stickerURL = body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.count == 1
             ? attachments.first?.sticker?.imageURL
             : nil
@@ -215,6 +261,7 @@ struct ChatMessage: Identifiable, Hashable {
         attachmentTypes: [String],
         stickerURL: URL?,
         photos: [ChatPhoto],
+        systemEventText: String?,
         isDeleted: Bool,
         deliveryStatus: MessageDeliveryStatus?
     ) {
@@ -228,6 +275,7 @@ struct ChatMessage: Identifiable, Hashable {
         self.attachmentTypes = attachmentTypes
         self.stickerURL = stickerURL
         self.photos = photos
+        self.systemEventText = systemEventText
         self.isDeleted = isDeleted
         self.deliveryStatus = deliveryStatus
     }
@@ -244,6 +292,7 @@ struct ChatMessage: Identifiable, Hashable {
             attachmentTypes: [],
             stickerURL: nil,
             photos: [],
+            systemEventText: nil,
             isDeleted: false,
             deliveryStatus: .sending
         )
@@ -261,6 +310,7 @@ struct ChatMessage: Identifiable, Hashable {
             attachmentTypes: attachmentTypes,
             stickerURL: stickerURL,
             photos: photos,
+            systemEventText: systemEventText,
             isDeleted: isDeleted,
             deliveryStatus: status
         )
@@ -276,6 +326,55 @@ struct ChatMessage: Identifiable, Hashable {
         case "sticker": return "[Стикер]"
         case "gift": return "[Подарок]"
         default: return "[Вложение]"
+        }
+    }
+
+    private static func systemEventText(
+        action: VKMessageAction?,
+        actionMemberID: Int?,
+        actorName: String,
+        profiles: [VKUserProfile]
+    ) -> String? {
+        guard let actionType = action?.type?.lowercased() else { return nil }
+        let memberID = action?.memberId ?? actionMemberID
+        let memberNameFromProfile = memberID.flatMap { id in
+            let profile = profiles.first(where: { $0.id == abs(id) })
+            let name = [profile?.firstName, profile?.lastName]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            return name.isEmpty ? nil : name
+        }
+        let actionMemberName = action?.memberName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let memberName = (actionMemberName?.isEmpty == false ? actionMemberName : nil)
+            ?? memberNameFromProfile
+            ?? memberID.map { "id\(abs($0))" }
+            ?? "пользователя"
+
+        switch actionType {
+        case "chat_invite_user", "chat_invite_user_by_link":
+            return "\(actorName) пригласил(а) \(memberName)"
+        case "chat_kick_user":
+            return "\(actorName) исключил(а) \(memberName)"
+        case "chat_promote_user", "chat_user_promote", "chat_admin_add", "chat_set_admin", "chat_moderator_add":
+            return "\(actorName) назначил(а) \(memberName) администратором"
+        case "chat_demote_user", "chat_user_demote", "chat_admin_remove", "chat_remove_admin", "chat_moderator_remove":
+            return "\(actorName) снял(а) \(memberName) с должности администратора"
+        case "chat_title_update":
+            return "\(actorName) изменил(а) название беседы"
+        case "chat_photo_update":
+            return "\(actorName) обновил(а) фото беседы"
+        case "chat_photo_remove":
+            return "\(actorName) удалил(а) фото беседы"
+        case "chat_create":
+            return "\(actorName) создал(а) беседу"
+        case "chat_pin_message":
+            return "\(actorName) закрепил(а) сообщение"
+        case "chat_unpin_message":
+            return "\(actorName) открепил(а) сообщение"
+        default:
+            let text = action?.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text?.isEmpty == false ? text : "Системное сообщение"
         }
     }
 }

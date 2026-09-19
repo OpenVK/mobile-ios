@@ -150,7 +150,9 @@ struct ChatView: View {
         }
         let message = viewModel.messages[index]
         let neighbor = viewModel.messages[neighborIndex]
-        return message.senderID == neighbor.senderID && message.isOutgoing == neighbor.isOutgoing
+        return message.systemEventText == nil && neighbor.systemEventText == nil
+            && message.senderID == neighbor.senderID
+            && message.isOutgoing == neighbor.isOutgoing
     }
 
     @available(iOS 26.0, *)
@@ -259,17 +261,23 @@ private struct MessageBubble: View {
     let onPhotoTap: (ChatPhoto) -> Void
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 6) {
-            if message.isOutgoing { Spacer(minLength: 48) }
-            if !message.isOutgoing && isChat && !isStickerMessage {
-                if showsSenderDetails {
-                    Avatar(user: sender, size: 26)
-                } else {
-                    Color.clear.frame(width: 26, height: 26)
+        Group {
+            if let systemEventText = message.systemEventText {
+                SystemMessagePlaque(text: systemEventText, date: message.date)
+            } else {
+                HStack(alignment: .bottom, spacing: 6) {
+                    if message.isOutgoing { Spacer(minLength: 48) }
+                    if !message.isOutgoing && isChat && !isStickerMessage {
+                        if showsSenderDetails {
+                            Avatar(user: sender, size: 26)
+                        } else {
+                            Color.clear.frame(width: 26, height: 26)
+                        }
+                    }
+                    messageContent
+                    if !message.isOutgoing { Spacer(minLength: 48) }
                 }
             }
-            messageContent
-            if !message.isOutgoing { Spacer(minLength: 48) }
         }
         .padding(.top, joinsPrevious ? 0 : 4)
     }
@@ -496,6 +504,27 @@ private struct ChatPhotoCollage: View {
     private var tileHeight: CGFloat {
         if visiblePhotos.count == 1 { return 260 }
         return visiblePhotos.count <= 4 ? 150 : 100
+    }
+}
+
+private struct SystemMessagePlaque: View {
+    let text: String
+    let date: Date
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(text)
+            Text(date, style: .time)
+                .font(.system(size: 10))
+                .opacity(0.75)
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+        .frame(maxWidth: .infinity)
     }
 }
 
