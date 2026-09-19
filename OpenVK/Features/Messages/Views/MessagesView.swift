@@ -8,6 +8,7 @@ import SwiftUI
 struct MessagesView: View {
     @StateObject private var viewModel = MessagesViewModel()
     @State private var showCreateChat = false
+    @State private var isViewingChat = false
 
     var body: some View {
         NavigationView {
@@ -28,6 +29,7 @@ struct MessagesView: View {
                     CreateChatView()
                 }
         }
+        .chatTabBarVisibility(isHidden: isViewingChat)
         .onAppear {
             if viewModel.conversations.isEmpty {
                 viewModel.load()
@@ -86,6 +88,8 @@ struct MessagesView: View {
                 ForEach(viewModel.conversations) { conversation in
                     NavigationLink {
                         ChatView(conversation: conversation)
+                            .onAppear { isViewingChat = true }
+                            .onDisappear { isViewingChat = false }
                     } label: {
                         ConversationRow(
                             conversation: conversation,
@@ -108,6 +112,16 @@ struct MessagesView: View {
                 }
             }
             .listStyle(.plain)
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder func chatTabBarVisibility(isHidden: Bool) -> some View {
+        if #available(iOS 16.0, *) {
+            self.toolbar(isHidden ? .hidden : .visible, for: .tabBar)
+        } else {
+            self
         }
     }
 }
