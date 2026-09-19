@@ -3,6 +3,8 @@ import SwiftUI
 struct ChatView: View {
     let conversation: Conversation
     @StateObject private var viewModel: ChatViewModel
+    @State private var text = ""
+    @State private var composerHeight: CGFloat = 40
 
     init(conversation: Conversation) {
         self.conversation = conversation
@@ -10,10 +12,26 @@ struct ChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        GeometryReader { geometry in
             messageHistory
+                .overlay(alignment: .bottom) {
+                    if #available(iOS 26.0, *) {
+                        messageComposer(maxHeight: geometry.size.height / 2)
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 8)
+                            .background(
+                                GeometryReader { composerGeometry in
+                                    Color.clear.preference(
+                                        key: ComposerHeightPreferenceKey.self,
+                                        value: composerGeometry.size.height
+                                    )
+                                }
+                            )
+                    }
+                }
         }
         .background(Color.white)
+        .onPreferenceChange(ComposerHeightPreferenceKey.self) { composerHeight = $0 }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -60,7 +78,7 @@ struct ChatView: View {
                     }
                     if viewModel.isLoading && viewModel.messages.isEmpty { ProgressView().padding(.top, 30) }
                     Color.clear
-                        .frame(height: 1)
+                        .frame(height: composerContentInset)
                         .id("chat-bottom")
                 }
                 .padding(.horizontal, 12)
@@ -87,6 +105,59 @@ struct ChatView: View {
         }
     }
 
+    private var composerContentInset: CGFloat {
+        if #available(iOS 26.0, *) {
+            composerHeight + 16
+        } else {
+            1
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private func messageComposer(maxHeight: CGFloat) -> some View {
+        let maximumLines = max(1, Int((maxHeight - 20) / 22))
+
+        return HStack(alignment: .bottom, spacing: 8) {
+            TextField("Сообщение", text: $text, axis: .vertical)
+                .font(.body)
+                .lineLimit(1...maximumLines)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+            if hasMessageText {
+                Button {
+                    let value = text
+                    text = ""
+                    viewModel.send(text: value)
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 25, height: 25)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .tint(Color.appAccent)
+                .transition(.scale.combined(with: .opacity))
+                .accessibilityLabel("Отправить сообщение")
+            }
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.78), value: hasMessageText)
+    }
+
+    private var hasMessageText: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+}
+
+private struct ComposerHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 40
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
 }
 
 private struct MessageBubble: View {
