@@ -40,7 +40,10 @@ struct MainTabView: View {
                     }
                     .tag(AppTab.search)
 
-                    MessagesView()
+                    MessagesView(
+                        selectedMedia: $selectedMedia,
+                        owningPost: $owningPost
+                    )
                     .tabItem {
                         Label(AppTab.messages.label, systemImage: selectedTab == .messages ? AppTab.messages.iconFilled : AppTab.messages.icon)
                     }

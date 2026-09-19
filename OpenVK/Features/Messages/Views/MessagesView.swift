@@ -9,6 +9,16 @@ struct MessagesView: View {
     @StateObject private var viewModel = MessagesViewModel()
     @State private var showCreateChat = false
     @State private var isViewingChat = false
+    @Binding var selectedMedia: Attachment?
+    @Binding var owningPost: Post?
+
+    init(
+        selectedMedia: Binding<Attachment?> = .constant(nil),
+        owningPost: Binding<Post?> = .constant(nil)
+    ) {
+        _selectedMedia = selectedMedia
+        _owningPost = owningPost
+    }
 
     var body: some View {
         NavigationView {
@@ -87,7 +97,11 @@ struct MessagesView: View {
             List {
                 ForEach(viewModel.conversations) { conversation in
                     NavigationLink {
-                        ChatView(conversation: conversation)
+                        ChatView(
+                            conversation: conversation,
+                            selectedMedia: $selectedMedia,
+                            owningPost: $owningPost
+                        )
                             .onAppear { isViewingChat = true }
                             .onDisappear { isViewingChat = false }
                     } label: {
