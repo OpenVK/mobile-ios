@@ -139,9 +139,13 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func updateTyping(_ note: Notification) {
-        guard let peerID = note.userInfo?["peerID"] as? Int, peerID == conversation.id else { return }
         let ids = (note.userInfo?["userIDs"] as? [Int]) ?? ((note.userInfo?["userID"] as? Int).map { [$0] } ?? [])
         guard !ids.isEmpty else { return }
+        if let peerID = note.userInfo?["peerID"] as? Int {
+            guard peerID == conversation.id else { return }
+        } else {
+            guard !conversation.isChat, ids.contains(abs(conversation.peer.uid ?? 0)) else { return }
+        }
         if ids.count == 1 { typingText = "Печатает" }
         else { typingText = "Печатают (ids.count) человека" }
         Task { @MainActor [weak self] in

@@ -64,7 +64,9 @@ struct ChatView: View {
                 Text(conversation.peer.displayName)
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
-                if let presence = viewModel.peerPresenceText {
+                if !conversation.isChat, let typing = viewModel.typingText {
+                    TypingStatusView(text: typing)
+                } else if let presence = viewModel.peerPresenceText {
                     Text(presence)
                         .font(.caption2)
                         .foregroundStyle(viewModel.isPeerOnline ? Color.appAccent : .secondary)
@@ -94,7 +96,7 @@ struct ChatView: View {
                 .padding(.vertical, 10)
             }
             .overlay(alignment: .bottom) {
-                if let typing = viewModel.typingText {
+                if conversation.isChat, let typing = viewModel.typingText {
                     Text(typing + "…")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -168,6 +170,24 @@ struct ChatView: View {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+}
+
+private struct TypingStatusView: View {
+    let text: String
+    @State private var dotCount = 1
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(text)
+            Text(String(repeating: ".", count: dotCount))
+                .frame(width: 9, alignment: .leading)
+        }
+        .font(.caption2)
+        .foregroundStyle(Color.appAccent)
+        .onReceive(Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()) { _ in
+            dotCount = dotCount == 3 ? 1 : dotCount + 1
+        }
+    }
 }
 
 private struct ComposerHeightPreferenceKey: PreferenceKey {

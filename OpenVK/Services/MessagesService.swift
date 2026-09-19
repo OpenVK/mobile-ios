@@ -170,6 +170,7 @@ final class MessagesService: MessagesServiceProtocol {
             updatedAt: timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : Date(),
             unreadCount: item.conversation.unreadCount ?? 0,
             lastMessageId: item.conversation.lastMessageId ?? message?.id ?? 0,
+            lastMessageReadState: message?.readState,
             isChat: isChat
         )
     }

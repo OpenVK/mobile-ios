@@ -14,6 +14,7 @@ struct Conversation: Identifiable, Hashable {
     let updatedAt: Date
     let unreadCount: Int
     let lastMessageId: Int
+    let lastMessageReadState: Int?
 
     var isChat: Bool
     var isGroup: Bool { peer.isGroup == true }
@@ -78,6 +79,7 @@ struct VKConversationMessage: Decodable {
     let body: String?
     let text: String?
     let attachments: [VKConversationAttachment]?
+    let readState: Int?
 }
 
 struct VKConversationAttachment: Decodable {

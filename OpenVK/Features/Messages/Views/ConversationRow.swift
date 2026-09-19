@@ -42,12 +42,52 @@ struct ConversationRow: View {
     }
 
     private var dateText: String {
-        if conversation.isChat {
-            let minutes = max(0, Int(Date().timeIntervalSince(conversation.updatedAt) / 60))
-            if minutes == 5 { return "5 минут назад" }
+        let calendar = Calendar.current
+        let now = Date()
+        if calendar.isDateInToday(conversation.updatedAt) {
+            return Self.timeFormatter.string(from: conversation.updatedAt)
         }
-        return conversation.updatedAt.openvkFormatted()
+
+        let startOfToday = calendar.startOfDay(for: now)
+        let startOfMessageDay = calendar.startOfDay(for: conversation.updatedAt)
+        let daysAgo = calendar.dateComponents([.day], from: startOfMessageDay, to: startOfToday).day ?? 0
+        if daysAgo < 7 {
+            return Self.weekdayFormatter.string(from: conversation.updatedAt).capitalized
+        }
+
+        if calendar.component(.year, from: conversation.updatedAt) == calendar.component(.year, from: now) {
+            return Self.dayMonthFormatter.string(from: conversation.updatedAt)
+        }
+        return Self.dayMonthYearFormatter.string(from: conversation.updatedAt)
     }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "EEE"
+        return formatter
+    }()
+
+    private static let dayMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "dd.MM"
+        return formatter
+    }()
+
+    private static let dayMonthYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ru_RU")
+        formatter.dateFormat = "dd.MM.yy"
+        return formatter
+    }()
 
     private func abbreviatedCount(_ count: Int, divisor: Int, suffix: String) -> String {
         let scaled = Int((Double(count) / Double(divisor) * 10).rounded())
@@ -85,8 +125,12 @@ struct ConversationRow: View {
                     }
 
                     Spacer(minLength: 4)
-
-                        Text(dateText)
+                    if conversation.lastMessageOutgoing {
+                        ConversationReadReceiptIcon(isRead: conversation.lastMessageReadState == 1)
+                            .foregroundStyle(Color.appAccent)
+                            .accessibilityLabel(conversation.lastMessageReadState == 1 ? "Прочитано" : "Не прочитано")
+                    }
+                    Text(dateText)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
@@ -99,8 +143,9 @@ struct ConversationRow: View {
                         .fontWeight(typingText == nil && conversation.unreadCount > 0 ? .medium : .regular)
                         .lineLimit(2)
 
+                    Spacer(minLength: 4)
+
                     if conversation.unreadCount > 0 {
-                        Spacer(minLength: 4)
                         Text(unreadCountText)
                             .font(.system(size: 11, weight: .bold))
                             .foregroundColor(.white)
@@ -127,5 +172,28 @@ struct ConversationRow: View {
         }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         return regex.stringByReplacingMatches(in: value, range: range, withTemplate: "$1")
+    }
+}
+
+private struct ConversationReadReceiptIcon: View {
+    let isRead: Bool
+    @State private var displaysSecondCheckmark = false
+
+    var body: some View {
+        ZStack {
+            Image(systemName: "checkmark")
+                .offset(x: displaysSecondCheckmark ? -2 : 0)
+            Image(systemName: "checkmark")
+                .opacity(displaysSecondCheckmark ? 1 : 0)
+                .offset(x: displaysSecondCheckmark ? 2 : 0)
+        }
+        .font(.system(size: 8, weight: .semibold))
+        .frame(width: 12, height: 8)
+        .onAppear { displaysSecondCheckmark = isRead }
+        .onChange(of: isRead) { isRead in
+            withAnimation(.easeOut(duration: 0.2)) {
+                displaysSecondCheckmark = isRead
+            }
+        }
     }
 }

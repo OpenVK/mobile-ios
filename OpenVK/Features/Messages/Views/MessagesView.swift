@@ -45,7 +45,7 @@ struct MessagesView: View {
                 AuthService.shared.fetchCounters()
             } else if (61...64).contains(type) {
                 viewModel.handleLongPollEvent(notification)
-            } else if [0, 5, 13, 14, 51, 52].contains(type) {
+            } else if [0, 3, 5, 7, 13, 14, 51, 52].contains(type) {
                 viewModel.load()
                 AuthService.shared.fetchCounters()
             } else if type == 80 {
