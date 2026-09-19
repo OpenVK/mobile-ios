@@ -126,7 +126,7 @@ struct ConversationRow: View {
 
                     Spacer(minLength: 4)
                     if conversation.lastMessageOutgoing {
-                        ConversationReadReceiptIcon(isRead: conversation.lastMessageReadState == 1)
+                        MessageReadReceiptIcon(isRead: conversation.lastMessageReadState == 1)
                             .foregroundStyle(Color.appAccent)
                             .accessibilityLabel(conversation.lastMessageReadState == 1 ? "Прочитано" : "Не прочитано")
                     }
@@ -175,7 +175,7 @@ struct ConversationRow: View {
     }
 }
 
-private struct ConversationReadReceiptIcon: View {
+struct MessageReadReceiptIcon: View {
     let isRead: Bool
     @State private var displaysSecondCheckmark = false
 

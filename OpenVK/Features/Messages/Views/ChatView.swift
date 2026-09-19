@@ -273,7 +273,7 @@ private struct MessageBubble: View {
                 .tint(.white.opacity(0.75))
                 .accessibilityLabel("Отправляется")
         case .unread, .read:
-            ReadReceiptIcon(isRead: status == .read)
+            MessageReadReceiptIcon(isRead: status == .read)
                 .accessibilityLabel(status == .read ? "Прочитано" : "Не прочитано")
         case .failed:
             Image(systemName: "exclamationmark.circle.fill")
@@ -288,27 +288,4 @@ private struct MessageBubble: View {
     }
 
     private var sender: User { User(uid: 0, username: "", displayName: message.senderName ?? "", isGroup: false) }
-}
-
-private struct ReadReceiptIcon: View {
-    let isRead: Bool
-    @State private var displaysSecondCheckmark = false
-
-    var body: some View {
-        ZStack {
-            Image(systemName: "checkmark")
-                .offset(x: displaysSecondCheckmark ? -2 : 0)
-            Image(systemName: "checkmark")
-                .opacity(displaysSecondCheckmark ? 1 : 0)
-                .offset(x: displaysSecondCheckmark ? 2 : 0)
-        }
-        .font(.system(size: 8, weight: .semibold))
-        .frame(width: 12, height: 8)
-        .onAppear { displaysSecondCheckmark = isRead }
-        .onChange(of: isRead) { isRead in
-            withAnimation(.easeOut(duration: 0.2)) {
-                displaysSecondCheckmark = isRead
-            }
-        }
-    }
 }

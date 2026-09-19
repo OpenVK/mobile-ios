@@ -66,12 +66,6 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func send() {
-        send(text: pendingText)
-    }
-
-    var pendingText = ""
-
     func send(text: String) {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
