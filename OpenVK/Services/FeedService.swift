@@ -740,6 +740,42 @@ struct VKVideoAttachment: Decodable {
     enum CodingKeys: String, CodingKey {
         case id, title, duration, image, player, files, ownerId, likes, comments, reposts
     }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try? container.decode(Int.self, forKey: .id)
+        ownerId = try? container.decode(Int.self, forKey: .ownerId)
+        title = try? container.decode(String.self, forKey: .title)
+        duration = try? container.decode(Int.self, forKey: .duration)
+        image = try? container.decode([VKVideoImage].self, forKey: .image)
+        player = try? container.decode(String.self, forKey: .player)
+        likes = try? container.decode(VKLikesInfo.self, forKey: .likes)
+        comments = try? container.decode(VKCommentsInfo.self, forKey: .comments)
+        reposts = try? container.decode(VKRepostsInfo.self, forKey: .reposts)
+        files = Self.decodeFiles(from: container)
+    }
+
+    private static func decodeFiles(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> [String: String]? {
+        guard let decoder = try? container.superDecoder(forKey: .files) else {
+            return nil
+        }
+
+        let value = try? decoder.singleValueContainer()
+        if let dictionary = try? value?.decode([String: String].self) {
+            return dictionary
+        }
+
+        if let urls = try? value?.decode([String].self) {
+            return Dictionary(uniqueKeysWithValues: urls.enumerated().map { index, url in
+                ("file_\(index)", url)
+            })
+        }
+
+        return nil
+    }
 }
 
 struct VKVideoImage: Decodable {

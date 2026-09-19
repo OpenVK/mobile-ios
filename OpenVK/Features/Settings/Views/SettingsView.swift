@@ -27,7 +27,7 @@ struct SettingsView: View {
                                     }
                                     SupporterBadgeView(screenName: currentUser.username)
                                 }
-                                if let instance = activeAccount?.instanceOption.displayName {
+                                if let instance = activeAccount?.instanceDisplayName {
                                     Text(instance)
                                         .font(.system(size: 12))
                                         .foregroundColor(.secondary)
@@ -68,7 +68,7 @@ struct SettingsView: View {
                                         }
                                         SupporterBadgeView(screenName: account.user.username)
                                     }
-                                    Text(account.instanceOption.displayName)
+                                    Text(account.instanceDisplayName)
                                         .font(.system(size: 12))
                                         .foregroundColor(.secondary)
                                 }
@@ -698,7 +698,7 @@ struct DataAndMemorySettingsView: View {
                 .disabled(cacheCleared)
             }
 
-            Section(footer: Text("Кэш хранит ответы API и изображения для ускорения работы приложения. Данные обновляются автоматически каждые 5 минут.")) {
+            Section(footer: Text("Кэш хранит ответы API и изображения для ускорения работы приложения. Изображения хранятся до 10 минут, а API-ответы — до 24 часов для работы без сети.")) {
                 EmptyView()
             }
         }

@@ -38,4 +38,24 @@ struct AuthAccount: Codable, Identifiable, Hashable {
     let token: String
     let instanceOption: InstanceOption
     let customInstanceHost: String
+
+    var instanceDisplayName: String {
+        guard instanceOption == .custom else {
+            return instanceOption.displayName
+        }
+
+        let host = customInstanceHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            return instanceOption.displayName
+        }
+
+        let normalizedHost = host.hasPrefix("http://") || host.hasPrefix("https://")
+            ? host
+            : "https://\(host)"
+        if let url = URL(string: normalizedHost), let urlHost = url.host {
+            let port = url.port.map { ":\($0)" } ?? ""
+            return urlHost + port
+        }
+        return host.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
 }

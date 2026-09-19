@@ -60,9 +60,7 @@ final class FeedViewModel: ObservableObject {
     }
 
     func load() {
-        if posts.isEmpty {
-            refresh()
-        }
+        refresh(clearPosts: posts.isEmpty)
     }
 
     func refreshAsync(clearPosts: Bool = false) async {
@@ -94,6 +92,7 @@ final class FeedViewModel: ObservableObject {
                 self.isLoading = false
                 switch result {
                 case .success(let data):
+                    self.prefetchImages(in: data.posts)
                     self.posts = data.posts
                     self.filteredPosts = data.posts
                     self.nextFrom = data.nextFrom
@@ -128,6 +127,7 @@ final class FeedViewModel: ObservableObject {
             self.isLoadingMore = false
             switch result {
             case .success(let data):
+                self.prefetchImages(in: data.posts)
                 if data.posts.isEmpty {
                     self.canLoadMore = false
                 } else {
@@ -192,5 +192,21 @@ final class FeedViewModel: ObservableObject {
                 self.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func prefetchImages(in posts: [Post]) {
+        let urls = posts.flatMap { post in
+            post.attachments.compactMap { attachment -> URL? in
+                switch attachment {
+                case .remoteImage(let url, _, _, _, _, _, _):
+                    return URL(string: url)
+                case .remoteVideo(_, _, let imageURL, _, _, _, _, _, _, _, _):
+                    return URL(string: imageURL)
+                default:
+                    return nil
+                }
+            }
+        }
+        ImageCache.shared.prefetch(urls)
     }
 }

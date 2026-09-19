@@ -39,9 +39,13 @@ struct MoreView: View {
         NavigationView {
             List {
                 Section {
-                    NavigationLink(destination: ProfileView(user: auth.currentUser ?? .current, selectedMedia: $selectedMedia, owningPost: $owningPost)) {
+                    let currentUser = auth.currentUser ?? .current
+                    NavigationLink(destination: ProfileView(user: currentUser, selectedMedia: $selectedMedia, owningPost: $owningPost)) {
                         HStack(spacing: 12) {
-                            Avatar(user: auth.currentUser ?? .current, size: 48)
+                            Avatar(
+                                user: currentUser,
+                                size: 48
+                            )
 
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 4) {
@@ -301,13 +305,11 @@ private struct AccountMenuItem: View {
 
     private func loadAvatar() {
         guard let url = account.user.avatarURL else { return }
-        URLSession.shared.dataTask(with: url) { data, _, _ in
-            guard let data = data, let rawImage = UIImage(data: data) else { return }
-            let circular = makeCircularImage(from: rawImage, size: 32)
-            DispatchQueue.main.async {
-                self.avatarImage = circular
-            }
-        }.resume()
+        avatarImage = nil
+        ImageCache.shared.load(url, maximumAge: 60, forceRefresh: true) { image in
+            guard let image else { return }
+            self.avatarImage = makeCircularImage(from: image, size: 32)
+        }
     }
 
     private func makeCircularImage(from image: UIImage, size: CGFloat) -> UIImage {

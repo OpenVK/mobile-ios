@@ -85,6 +85,9 @@ struct ProfilePhotosSection: View {
     }
 
     private func openPhotoViewer(for selectedPhoto: Photo) {
+        var galleryUser = user
+        galleryUser.photoCount = photoCount
+
         let photoAttachment: Attachment
         if let url = selectedPhoto.imageURL {
             photoAttachment = .remoteImage(
@@ -117,7 +120,7 @@ struct ProfilePhotosSection: View {
         }
 
         let dummyPost = Post(
-            author: user,
+            author: galleryUser,
             timeAgo: "",
             text: "",
             attachments: attachments

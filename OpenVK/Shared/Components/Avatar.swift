@@ -8,6 +8,8 @@ import SwiftUI
 struct Avatar: View {
     let user: User
     var size: CGFloat = 42
+    var refreshOnAppear = false
+    var refreshToken: UUID?
 
     var body: some View {
         ZStack {
@@ -16,7 +18,12 @@ struct Avatar: View {
                 .frame(width: size, height: size)
 
             if let url = user.avatarURL {
-                RemoteImage(url: url, placeholder: placeholder)
+                RemoteImage(
+                    url: url,
+                    forceRefreshOnAppear: refreshOnAppear,
+                    refreshToken: refreshToken,
+                    placeholder: { placeholder }
+                )
                     .frame(width: size, height: size)
                     .clipShape(Circle())
             } else {
@@ -35,11 +42,20 @@ struct Avatar: View {
 struct RemoteImage<Placeholder: View>: View {
     let url: URL
     let placeholder: Placeholder
+    var forceRefreshOnAppear = false
+    var refreshToken: UUID?
 
     @StateObject private var loader = ImageLoader()
 
-    init(url: URL, @ViewBuilder placeholder: () -> Placeholder) {
+    init(
+        url: URL,
+        forceRefreshOnAppear: Bool = false,
+        refreshToken: UUID? = nil,
+        @ViewBuilder placeholder: () -> Placeholder
+    ) {
         self.url = url
+        self.forceRefreshOnAppear = forceRefreshOnAppear
+        self.refreshToken = refreshToken
         self.placeholder = placeholder()
     }
 
@@ -59,10 +75,13 @@ struct RemoteImage<Placeholder: View>: View {
             }
         }
         .onAppear {
-            loader.load(from: url)
+            loader.load(from: url, forceRefresh: forceRefreshOnAppear)
         }
         .onChange(of: url) { newUrl in
             loader.load(from: newUrl)
+        }
+        .onChange(of: refreshToken) { _ in
+            loader.load(from: url, forceRefresh: true)
         }
     }
 }
@@ -70,29 +89,31 @@ struct RemoteImage<Placeholder: View>: View {
 final class ImageLoader: ObservableObject {
     @Published var image: UIImage?
 
-    private var task: URLSessionDataTask?
     private var loadedURL: URL?
+    private let avatarMaximumAge: TimeInterval = 60
 
-    func load(from url: URL) {
-        if loadedURL == url {
+    func load(from url: URL, forceRefresh: Bool = false) {
+        let cachedImage = ImageCache.shared.image(for: url, maximumAge: avatarMaximumAge)
+        let isSameURL = loadedURL == url
+
+        if !forceRefresh, isSameURL, let cachedImage {
+            image = cachedImage
             return
         }
-        
-        task?.cancel()
-        task = nil
-        image = nil
-        loadedURL = url
-        
-        task = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let self = self, let data = data, let img = UIImage(data: data) else { return }
-            DispatchQueue.main.async {
-                self.image = img
-            }
-        }
-        task?.resume()
-    }
 
-    deinit {
-        task?.cancel()
+        loadedURL = url
+        if !forceRefresh || !isSameURL {
+            image = cachedImage
+        }
+        guard forceRefresh || image == nil else { return }
+
+        ImageCache.shared.load(
+            url,
+            maximumAge: avatarMaximumAge,
+            forceRefresh: forceRefresh
+        ) { [weak self] image in
+            guard let self = self, self.loadedURL == url else { return }
+            self.image = image
+        }
     }
 }

@@ -15,6 +15,7 @@ struct MainTabView: View {
     @State private var topInset: CGFloat = 0
     @State private var selectedMedia: Attachment? = nil
     @State private var owningPost: Post? = nil
+    @StateObject private var connectionStatus = ConnectionStatusService.shared
 
     var body: some View {
         ZStack {
@@ -61,6 +62,16 @@ struct MainTabView: View {
                         .ignoresSafeArea(.all, edges: .top)
                         .allowsHitTesting(false)
                 }
+
+                if let issue = connectionStatus.issue {
+                    ConnectionStatusButton(issue: issue) {
+                        connectionStatus.refresh()
+                    }
+                    .padding(.top, topInset + 48)
+                    .padding(.trailing, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .zIndex(10)
+                }
             }
             .background(
                 GeometryReader { geometry in
@@ -106,6 +117,63 @@ struct MainTabView: View {
         }
         .onAppear {
             auth.fetchCounters()
+            connectionStatus.start()
+        }
+    }
+}
+
+private struct ConnectionStatusButton: View {
+    let issue: ConnectionStatusService.Issue
+    let retry: () -> Void
+
+    @State private var showDetails = false
+
+    var body: some View {
+        Button {
+            showDetails = true
+        } label: {
+            Image(systemName: issue == .noInternet ? "wifi.slash" : "server.rack")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 34, height: 34)
+                .background(Color.red)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.16), radius: 4, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(issue.title)
+        .sheet(isPresented: $showDetails) {
+            NavigationView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Image(systemName: issue == .noInternet ? "wifi.slash" : "server.rack")
+                        .font(.system(size: 38))
+                        .foregroundColor(.red)
+
+                    Text(issue.title)
+                        .font(.title2.weight(.bold))
+
+                    Text(issue.details)
+                        .font(.body)
+                        .foregroundColor(.secondary)
+
+                    Button(action: retry) {
+                        Label("Проверить снова", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+
+                    Spacer()
+                }
+                .padding(24)
+                .navigationTitle("Подключение")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Закрыть") { showDetails = false }
+                    }
+                }
+            }
         }
     }
 }

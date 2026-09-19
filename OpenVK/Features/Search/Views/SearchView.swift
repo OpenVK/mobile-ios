@@ -288,22 +288,32 @@ struct SearchView: View {
     @ViewBuilder
     private var resultsContentView: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
-                switch viewModel.selectedCategory {
-                case .all:
-                    allSummaryView
-                case .users:
-                    usersFullListView
-                case .groups:
-                    groupsFullListView
-                case .posts:
-                    postsFullListView
-                case .videos:
+            Group {
+                if viewModel.selectedCategory == .videos {
                     videosFullGridView
-                case .audios:
-                    audiosFullListView
-                case .documents:
-                    documentsFullListView
+                        .frame(maxWidth: .infinity)
+                } else {
+                    LazyVStack(spacing: 0) {
+                        switch viewModel.selectedCategory {
+                        case .all:
+                            allSummaryView
+                                .frame(maxWidth: .infinity)
+                        case .users:
+                            usersFullListView
+                        case .groups:
+                            groupsFullListView
+                        case .posts:
+                            postsFullListView
+                                .frame(maxWidth: .infinity)
+                        case .videos:
+                            EmptyView()
+                        case .audios:
+                            audiosFullListView
+                        case .documents:
+                            documentsFullListView
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
                 }
             }
             .padding(.bottom, 24)
@@ -804,41 +814,39 @@ struct SearchView: View {
             }
         }) {
             VStack(alignment: .leading, spacing: 6) {
-                ZStack(alignment: .bottomTrailing) {
-                    if let url = video.imageURL {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(16/9, contentMode: .fill)
-                            default:
+                Color.clear
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .overlay {
+                        ZStack {
+                            if let url = video.imageURL {
+                                CachedRemoteImage(url: url, contentMode: .fill) {
+                                    Rectangle()
+                                        .fill(Color(.secondarySystemBackground))
+                                        .overlay(
+                                            Image(systemName: "video.fill")
+                                                .font(.system(size: 24))
+                                                .foregroundColor(Color(.tertiaryLabel))
+                                        )
+                                }
+                            } else {
                                 Rectangle()
                                     .fill(Color(.secondarySystemBackground))
-                                    .aspectRatio(16/9, contentMode: .fill)
                                     .overlay(
                                         Image(systemName: "video.fill")
                                             .font(.system(size: 24))
                                             .foregroundColor(Color(.tertiaryLabel))
                                     )
                             }
+
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 28))
+                                .foregroundColor(Color.white.opacity(0.9))
                         }
-                    } else {
-                        Rectangle()
-                            .fill(Color(.secondarySystemBackground))
-                            .aspectRatio(16/9, contentMode: .fill)
-                            .overlay(
-                                Image(systemName: "video.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(Color(.tertiaryLabel))
-                            )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundColor(Color.white.opacity(0.9))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-
+                .clipped()
+                .cornerRadius(10)
+                .overlay(alignment: .bottomTrailing) {
                     Text(video.duration)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.white)
@@ -848,9 +856,6 @@ struct SearchView: View {
                         .cornerRadius(4)
                         .padding(6)
                 }
-                .frame(maxWidth: .infinity)
-                .clipped()
-                .cornerRadius(10)
 
                 Text(video.title)
                     .font(.system(size: 13, weight: .medium))

@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UserNotifications
 import AVFoundation
 
 class AppDelegate: NSObject, UIApplicationDelegate {
@@ -41,20 +42,17 @@ struct OpenVKApp: App {
             RootView()
                 .environmentObject(auth)
                 .onAppear {
-                    if auth.isAuthenticated {
-                        OnlineService.shared.start()
-                        LongPollService.shared.start()
-                    }
+                    requestNotificationPermissions()
+                    updateBackgroundServices()
                 }
                 .onChange(of: scenePhase) { newPhase in
                     switch newPhase {
                     case .active:
-                        if auth.isAuthenticated {
-                            OnlineService.shared.start()
-                            LongPollService.shared.resumeAfterBackground()
-                        }
+                        updateBackgroundServices()
+                        LongPollService.shared.resumeAfterBackground()
                     case .inactive, .background:
                         OnlineService.shared.stop()
+                        AvatarRefreshService.shared.stop()
                         LongPollService.shared.prepareForBackground()
                     @unknown default:
                         break
@@ -62,14 +60,37 @@ struct OpenVKApp: App {
                 }
                 .onChange(of: auth.isAuthenticated) { isAuth in
                     if isAuth && scenePhase == .active {
-                        OnlineService.shared.start()
-                        LongPollService.shared.start()
+                        updateBackgroundServices()
+                        LongPollService.shared.resumeAfterBackground()
                     } else if !isAuth {
                         OnlineService.shared.stop()
+                        AvatarRefreshService.shared.stop()
                         LongPollService.shared.stop()
                     }
                 }
         }
     }
 
+    private func updateBackgroundServices() {
+        let shouldRun = auth.isAuthenticated && scenePhase == .active
+        if shouldRun {
+            OnlineService.shared.start()
+            AvatarRefreshService.shared.start()
+            LongPollService.shared.start()
+        } else {
+            OnlineService.shared.stop()
+            AvatarRefreshService.shared.stop()
+        }
+    }
+
+    private func requestNotificationPermissions() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+            if granted {
+                print("Notification permissions granted.")
+                AuthService.shared.updateAppIconBadge()
+            } else if let error = error {
+                print("Error requesting notification permissions: \(error.localizedDescription)")
+            }
+        }
+    }
 }

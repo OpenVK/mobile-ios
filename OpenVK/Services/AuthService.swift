@@ -91,34 +91,10 @@ final class AuthService: ObservableObject {
             if let userData = UserDefaults.standard.data(forKey: "openvk.current_user"),
                let decodedUser = try? JSONDecoder().decode(User.self, from: userData) {
                 self.currentUser = decodedUser
-
-                if decodedUser.uid == nil || decodedUser.uid == 0 || decodedUser.isOfficial == nil {
-                    fetchUserProfile(token: activeToken) { [weak self] result in
-                        if case .success(let user) = result {
-                            DispatchQueue.main.async {
-                                self?.currentUser = user
-                                if let encoded = try? JSONEncoder().encode(user) {
-                                    UserDefaults.standard.set(encoded, forKey: "openvk.current_user")
-                                }
-                                self?.updateAccountUser(user)
-                            }
-                        }
-                    }
-                }
             } else {
                 self.currentUser = .current
-                fetchUserProfile(token: activeToken) { [weak self] result in
-                    if case .success(let user) = result {
-                        DispatchQueue.main.async {
-                            self?.currentUser = user
-                            if let encoded = try? JSONEncoder().encode(user) {
-                                UserDefaults.standard.set(encoded, forKey: "openvk.current_user")
-                            }
-                            self?.updateAccountUser(user)
-                        }
-                    }
-                }
             }
+
         }
     }
 
@@ -161,6 +137,7 @@ final class AuthService: ObservableObject {
         NotificationCenter.default.post(name: .openvkAccountDidChange, object: nil)
 
         fetchCounters()
+        AvatarRefreshService.shared.start()
     }
 
     func removeAccount(byUsername username: String) {
@@ -256,6 +233,45 @@ final class AuthService: ObservableObject {
         if showFriends { totalBadge += friendsCount }
 
         UIApplication.shared.applicationIconBadgeNumber = totalBadge
+    }
+
+    func updateCurrentUserIfNeeded(_ user: User) {
+        guard let currentUser, currentUser.uid == user.uid else { return }
+
+        self.currentUser = user
+        if let encoded = try? JSONEncoder().encode(user) {
+            UserDefaults.standard.set(encoded, forKey: "openvk.current_user")
+        }
+        updateAccountUser(user)
+    }
+
+    func refreshCurrentUser() {
+        guard isAuthenticated, let token else { return }
+
+        fetchUserProfile(token: token) { [weak self] result in
+            guard let self else { return }
+            guard case .success(let user) = result else { return }
+
+            let apply: () -> Void = { [weak self] in
+                guard let self,
+                      self.token == token,
+                      (self.currentUser?.uid == user.uid || self.currentUser?.uid == nil || self.currentUser?.username == "user") else { return }
+                self.currentUser = user
+                if let encoded = try? JSONEncoder().encode(user) {
+                    UserDefaults.standard.set(encoded, forKey: "openvk.current_user")
+                }
+                self.updateAccountUser(user)
+            }
+
+            guard let avatarURL = user.avatarURL else {
+                DispatchQueue.main.async(execute: apply)
+                return
+            }
+
+            ImageCache.shared.load(avatarURL, maximumAge: 5 * 60, forceRefresh: true) { _ in
+                apply()
+            }
+        }
     }
 
     private func saveAccounts() {
@@ -411,11 +427,19 @@ final class AuthService: ObservableObject {
         }
         if !raw.hasSuffix("/") { raw += "/" }
 
-        let url = URL(string: raw + "method/users.get?v=5.131&access_token=\(token)&fields=photo_100,city,online,verified,screen_name")!
+        var components = URLComponents(string: raw + "method/users.get")!
+        components.queryItems = [
+            URLQueryItem(name: "v", value: "5.131"),
+            URLQueryItem(name: "access_token", value: token),
+            URLQueryItem(name: "fields", value: "photo_100,photo_200,city,online,verified,screen_name"),
+            URLQueryItem(name: "ovk_cache_bust", value: UUID().uuidString)
+        ]
 
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: components.url!)
         request.httpMethod = "GET"
         request.setValue("okhttp/4.12.0", forHTTPHeaderField: "User-Agent")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
@@ -456,6 +480,7 @@ final class AuthService: ObservableObject {
                 let last_name: String
                 let screen_name: String?
                 let photo_100: String?
+                let photo_200: String?
                 let city: VKCity?
                 let online: Int?
                 let verified: Int?
@@ -472,7 +497,7 @@ final class AuthService: ObservableObject {
                         uid: vkUser.id,
                         username: vkUser.screen_name ?? "id\(vkUser.id)",
                         displayName: "\(vkUser.first_name) \(vkUser.last_name)".trimmingCharacters(in: .whitespaces),
-                        avatarURL: vkUser.photo_100.flatMap { URL(string: $0) },
+                        avatarURL: (vkUser.photo_200 ?? vkUser.photo_100).flatMap { URL(string: $0) },
                         city: vkUser.city?.title,
                         isOnline: vkUser.online == 1,
                         lastSeen: nil,
