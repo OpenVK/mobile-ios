@@ -106,6 +106,7 @@
 		2488C88B7D103EB010D337F6 /* ProfilePhotosSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24886996917393A8D79EDFD8 /* ProfilePhotosSection.swift */; };
 		2488CDDE74BD6A7B98F30A05 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24885F7776DB332A8D825637 /* AppConfig.swift */; };
 		2488CF3D965FEE6693A6AA29 /* MoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24883CBE4032D72F208AD990 /* MoreView.swift */; };
+		24A1000000000000000000E8 /* StickerStoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24A1000000000000000000E9 /* StickerStoreView.swift */; };
 		2488DF9E1E723B2B18B005D6 /* TwoFactorActionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248815898519574DF3BFB654 /* TwoFactorActionsView.swift */; };
 		2488E14F93D33966F690E885 /* NavigationPanelItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488589CB839F4AE2184CFD5 /* NavigationPanelItem.swift */; };
 		2488E30787E0BAD259A44EEA /* NotificationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488FBC08488BD30BA0E5393 /* NotificationsView.swift */; };
@@ -176,6 +177,7 @@
 		248835CCE4D90F15A3EF3358 /* LoginView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		24883ABFDC7128F285A146D1 /* BirthdaysViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = BirthdaysViewModel.swift; sourceTree = "<group>"; };
 		24883CBE4032D72F208AD990 /* MoreView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MoreView.swift; sourceTree = "<group>"; };
+		24A1000000000000000000E9 /* StickerStoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickerStoreView.swift; sourceTree = "<group>"; };
 		24883D2DDEA0F47CBA914ACD /* Group.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Group.swift; sourceTree = "<group>"; };
 		24884495FA6075BDCFC3B9B4 /* PostCard.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PostCard.swift; sourceTree = "<group>"; };
 		2488462D353516D5CD017684 /* LoginActionsView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoginActionsView.swift; sourceTree = "<group>"; };
@@ -771,6 +773,7 @@
 				2488BA6EE1B3727467FF88BD /* FriendsListView.swift */,
 				248800543A1474495806DADE /* GroupsListView.swift */,
 				24883CBE4032D72F208AD990 /* MoreView.swift */,
+				24A1000000000000000000E9 /* StickerStoreView.swift */,
 				2488501524C0E39CCE4EDEFC /* ProfileHeaderView.swift */,
 				248803080167BEB5FBD93719 /* ProfileInfoSection.swift */,
 				24886996917393A8D79EDFD8 /* ProfilePhotosSection.swift */,
@@ -1016,6 +1019,7 @@
 				2488887FDC51329C98A7A0B2 /* FriendsListView.swift in Sources */,
 				2488862D99A532D535C872BA /* GroupsListView.swift in Sources */,
 				2488CF3D965FEE6693A6AA29 /* MoreView.swift in Sources */,
+				24A1000000000000000000E8 /* StickerStoreView.swift in Sources */,
 				24882FCA625E3572D3AC5781 /* ProfileHeaderView.swift in Sources */,
 				248857A5BAE4E3FAF97D723E /* ProfileInfoSection.swift in Sources */,
 				2488C88B7D103EB010D337F6 /* ProfilePhotosSection.swift in Sources */,
