@@ -205,10 +205,34 @@ private struct MessageBubble: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if message.isOutgoing { Spacer(minLength: 48) }
-            if !message.isOutgoing && isChat { Avatar(user: sender, size: 26) }
-            bubble
+            if !message.isOutgoing && isChat && !isStickerMessage { Avatar(user: sender, size: 26) }
+            messageContent
             if !message.isOutgoing { Spacer(minLength: 48) }
         }
+    }
+
+    @ViewBuilder
+    private var messageContent: some View {
+        if let stickerURL = message.stickerURL {
+            sticker(url: stickerURL)
+        } else {
+            bubble
+        }
+    }
+
+    private func sticker(url: URL) -> some View {
+        ZStack(alignment: .bottomTrailing) {
+            CachedRemoteImage(url: url, contentMode: .fit) {
+                ProgressView()
+                    .frame(width: 160, height: 160)
+            }
+            .frame(width: 160, height: 160)
+
+            stickerMetadata
+                .padding(4)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Стикер, \(message.date.formatted(date: .omitted, time: .shortened))")
     }
 
     private var bubble: some View {
@@ -251,7 +275,7 @@ private struct MessageBubble: View {
 
     private var timeLabel: some View {
         Text(message.date, style: .time)
-            .font(.caption2)
+            .font(.system(size: 10))
             .foregroundStyle(message.isOutgoing ? .white.opacity(0.75) : .secondary)
     }
 
@@ -262,6 +286,20 @@ private struct MessageBubble: View {
                 deliveryStatusLabel(status)
             }
         }
+    }
+
+    private var stickerMetadata: some View {
+        HStack(spacing: 4) {
+            Text(message.date, style: .time)
+                .font(.system(size: 10))
+            if let status = message.deliveryStatus {
+                deliveryStatusLabel(status)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
     @ViewBuilder
@@ -285,6 +323,10 @@ private struct MessageBubble: View {
 
     private var displaysTimeBesideText: Bool {
         message.text.count <= (message.isOutgoing ? 18 : 25) && !message.isDeleted
+    }
+
+    private var isStickerMessage: Bool {
+        message.stickerURL != nil
     }
 
     private var sender: User { User(uid: 0, username: "", displayName: message.senderName ?? "", isGroup: false) }

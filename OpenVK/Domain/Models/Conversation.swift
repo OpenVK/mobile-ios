@@ -84,6 +84,35 @@ struct VKConversationMessage: Decodable {
 
 struct VKConversationAttachment: Decodable {
     let type: String?
+    let sticker: VKSticker?
+}
+
+struct VKSticker: Decodable {
+    let photo128: String?
+    let photo256: String?
+    let photo512: String?
+    let images: [VKStickerImage]?
+
+    private enum CodingKeys: String, CodingKey {
+        case photo128 = "photo_128"
+        case photo256 = "photo_256"
+        case photo512 = "photo_512"
+        case images
+    }
+
+    var imageURL: URL? {
+        let imageFromList = images?.first(where: { $0.width >= 256 })?.url
+            ?? images?.last?.url
+        return [photo256, photo512, photo128, imageFromList]
+            .compactMap { $0 }
+            .compactMap(URL.init(string:))
+            .first
+    }
+}
+
+struct VKStickerImage: Decodable {
+    let url: String?
+    let width: Int
 }
 
 struct VKMessagesHistoryResponse: Decodable {
@@ -116,6 +145,7 @@ struct ChatMessage: Identifiable, Hashable {
     let isOutgoing: Bool
     let senderName: String?
     let attachmentTypes: [String]
+    let stickerURL: URL?
     let isDeleted: Bool
     let deliveryStatus: MessageDeliveryStatus?
 
@@ -131,6 +161,9 @@ struct ChatMessage: Identifiable, Hashable {
         let name = [profile?.firstName, profile?.lastName].compactMap { $0 }.joined(separator: " ")
         senderName = name.isEmpty ? nil : name
         attachmentTypes = attachments.compactMap(\.type)
+        stickerURL = body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.count == 1
+            ? attachments.first?.sticker?.imageURL
+            : nil
         isDeleted = message.deleted == 1
         deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
     }
@@ -142,6 +175,7 @@ struct ChatMessage: Identifiable, Hashable {
         isOutgoing: Bool,
         senderName: String?,
         attachmentTypes: [String],
+        stickerURL: URL?,
         isDeleted: Bool,
         deliveryStatus: MessageDeliveryStatus?
     ) {
@@ -151,6 +185,7 @@ struct ChatMessage: Identifiable, Hashable {
         self.isOutgoing = isOutgoing
         self.senderName = senderName
         self.attachmentTypes = attachmentTypes
+        self.stickerURL = stickerURL
         self.isDeleted = isDeleted
         self.deliveryStatus = deliveryStatus
     }
@@ -163,6 +198,7 @@ struct ChatMessage: Identifiable, Hashable {
             isOutgoing: true,
             senderName: nil,
             attachmentTypes: [],
+            stickerURL: nil,
             isDeleted: false,
             deliveryStatus: .sending
         )
@@ -176,6 +212,7 @@ struct ChatMessage: Identifiable, Hashable {
             isOutgoing: isOutgoing,
             senderName: senderName,
             attachmentTypes: attachmentTypes,
+            stickerURL: stickerURL,
             isDeleted: isDeleted,
             deliveryStatus: status
         )
