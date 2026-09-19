@@ -188,6 +188,12 @@ final class LongPollService {
         if event.count > 3, let peerID = event[3].intValue {
             userInfo["peerID"] = peerID
         }
+        if (type == 6 || type == 7), event.count > 1, let peerID = event[1].intValue {
+            userInfo["peerID"] = peerID
+        }
+        if (type == 8 || type == 9), event.count > 1, let userID = event[1].intValue {
+            userInfo["userID"] = abs(userID)
+        }
         if event.count > 5, case .string(let text) = event[5] {
             userInfo["text"] = text
         }

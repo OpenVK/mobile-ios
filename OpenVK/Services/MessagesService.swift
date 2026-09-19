@@ -9,6 +9,7 @@ protocol MessagesServiceProtocol {
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func fetchHistory(peerID: Int, offset: Int, count: Int, completion: @escaping (Result<MessagesPage, Error>) -> Void)
     func sendMessage(peerID: Int, text: String, completion: @escaping (Result<Int, Error>) -> Void)
+    func setTyping(peerID: Int)
     func markAsRead(peerID: Int)
 }
 
@@ -46,6 +47,15 @@ final class MessagesService: MessagesServiceProtocol {
             as: Int.self,
             completion: { result in completion(result.mapError { $0 as Error }) }
         )
+    }
+
+    func setTyping(peerID: Int) {
+        client.call(
+            method: "messages.setActivity",
+            parameters: ["peer_id": String(peerID), "type": "typing"],
+            httpMethod: "POST",
+            as: Int.self
+        ) { _ in }
     }
 
     func markAsRead(peerID: Int) {
@@ -124,6 +134,7 @@ final class MessagesService: MessagesServiceProtocol {
                 avatarURL: (profile.photo200 ?? profile.photo100).flatMap(URL.init),
                 isOnline: profile.online == 1,
                 onlinePlatform: profile.lastSeen?.platformName,
+                lastSeen: profile.lastSeen?.time.map { Date(timeIntervalSince1970: $0).openvkLastSeen(sex: profile.sex) },
                 isOfficial: profile.verified == 1
             )
         } else {

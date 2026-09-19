@@ -99,6 +99,7 @@ struct VKHistoryMessage: Decodable {
     let text: String?
     let attachments: [VKConversationAttachment]?
     let deleted: Int?
+    let readState: Int?
 }
 
 struct MessagesPage {
@@ -114,6 +115,7 @@ struct ChatMessage: Identifiable, Hashable {
     let senderName: String?
     let attachmentTypes: [String]
     let isDeleted: Bool
+    let deliveryStatus: MessageDeliveryStatus?
 
     init(message: VKHistoryMessage, profiles: [VKUserProfile]) {
         let senderID = message.fromId ?? 0
@@ -128,6 +130,53 @@ struct ChatMessage: Identifiable, Hashable {
         senderName = name.isEmpty ? nil : name
         attachmentTypes = attachments.compactMap(\.type)
         isDeleted = message.deleted == 1
+        deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
+    }
+
+    private init(
+        id: Int,
+        text: String,
+        date: Date,
+        isOutgoing: Bool,
+        senderName: String?,
+        attachmentTypes: [String],
+        isDeleted: Bool,
+        deliveryStatus: MessageDeliveryStatus?
+    ) {
+        self.id = id
+        self.text = text
+        self.date = date
+        self.isOutgoing = isOutgoing
+        self.senderName = senderName
+        self.attachmentTypes = attachmentTypes
+        self.isDeleted = isDeleted
+        self.deliveryStatus = deliveryStatus
+    }
+
+    static func pending(text: String) -> ChatMessage {
+        ChatMessage(
+            id: -Int.random(in: 1...Int.max),
+            text: text,
+            date: Date(),
+            isOutgoing: true,
+            senderName: nil,
+            attachmentTypes: [],
+            isDeleted: false,
+            deliveryStatus: .sending
+        )
+    }
+
+    func updatingDeliveryStatus(_ status: MessageDeliveryStatus, id: Int? = nil) -> ChatMessage {
+        ChatMessage(
+            id: id ?? self.id,
+            text: text,
+            date: date,
+            isOutgoing: isOutgoing,
+            senderName: senderName,
+            attachmentTypes: attachmentTypes,
+            isDeleted: isDeleted,
+            deliveryStatus: status
+        )
     }
 
     private static func attachmentTitle(_ type: String?) -> String {
@@ -142,4 +191,11 @@ struct ChatMessage: Identifiable, Hashable {
         default: return "[Вложение]"
         }
     }
+}
+
+enum MessageDeliveryStatus: Hashable {
+    case sending
+    case unread
+    case read
+    case failed
 }

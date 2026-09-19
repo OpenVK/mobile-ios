@@ -32,6 +32,7 @@ struct ChatView: View {
         }
         .background(Color.white)
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { composerHeight = $0 }
+        .onChange(of: text) { viewModel.sendTyping(for: $0) }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -59,9 +60,17 @@ struct ChatView: View {
     private var chatTitle: some View {
         HStack(spacing: 8) {
             Avatar(user: conversation.peer, size: 28)
-            Text(conversation.peer.displayName)
-                .font(.system(size: 16, weight: .semibold))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(conversation.peer.displayName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .lineLimit(1)
+                if let presence = viewModel.peerPresenceText {
+                    Text(presence)
+                        .font(.caption2)
+                        .foregroundStyle(viewModel.isPeerOnline ? Color.appAccent : .secondary)
+                        .lineLimit(1)
+                }
+            }
         }
         .contentShape(Rectangle())
     }
@@ -193,14 +202,14 @@ private struct MessageBubble: View {
             if displaysTimeBesideText {
                 HStack(alignment: .lastTextBaseline, spacing: 7) {
                     messageText
-                    timeLabel
+                    messageMetadata
                 }
             } else {
                 VStack(alignment: .leading, spacing: 3) {
                     messageText
                     HStack {
                         Spacer(minLength: 0)
-                        timeLabel
+                        messageMetadata
                     }
                 }
             }
@@ -226,9 +235,60 @@ private struct MessageBubble: View {
             .foregroundStyle(message.isOutgoing ? .white.opacity(0.75) : .secondary)
     }
 
+    private var messageMetadata: some View {
+        HStack(spacing: 4) {
+            timeLabel
+            if let status = message.deliveryStatus {
+                deliveryStatusLabel(status)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func deliveryStatusLabel(_ status: MessageDeliveryStatus) -> some View {
+        switch status {
+        case .sending:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(.white.opacity(0.75))
+                .accessibilityLabel("Отправляется")
+        case .unread, .read:
+            ReadReceiptIcon(isRead: status == .read)
+                .accessibilityLabel(status == .read ? "Прочитано" : "Не прочитано")
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(.red)
+                .accessibilityLabel("Ошибка отправки")
+        }
+    }
+
     private var displaysTimeBesideText: Bool {
-        message.text.count <= 25 && !message.isDeleted
+        message.text.count <= (message.isOutgoing ? 18 : 25) && !message.isDeleted
     }
 
     private var sender: User { User(uid: 0, username: "", displayName: message.senderName ?? "", isGroup: false) }
+}
+
+private struct ReadReceiptIcon: View {
+    let isRead: Bool
+    @State private var displaysSecondCheckmark = false
+
+    var body: some View {
+        ZStack {
+            Image(systemName: "checkmark")
+                .offset(x: displaysSecondCheckmark ? -2 : 0)
+            Image(systemName: "checkmark")
+                .opacity(displaysSecondCheckmark ? 1 : 0)
+                .offset(x: displaysSecondCheckmark ? 2 : 0)
+        }
+        .font(.system(size: 8, weight: .semibold))
+        .frame(width: 12, height: 8)
+        .onAppear { displaysSecondCheckmark = isRead }
+        .onChange(of: isRead) { isRead in
+            withAnimation(.easeOut(duration: 0.2)) {
+                displaysSecondCheckmark = isRead
+            }
+        }
+    }
 }
