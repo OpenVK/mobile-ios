@@ -3,8 +3,6 @@ import SwiftUI
 struct ChatView: View {
     let conversation: Conversation
     @StateObject private var viewModel: ChatViewModel
-    @State private var text = ""
-    @FocusState private var focused: Bool
 
     init(conversation: Conversation) {
         self.conversation = conversation
@@ -14,9 +12,8 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             messageHistory
-            if #unavailable(iOS 26.0) { inputBar }
         }
-        .background(Color(.systemGroupedBackground))
+        .background(Color.white)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -33,9 +30,6 @@ struct ChatView: View {
             }
         }
         .hideMessagesTabBar()
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if #available(iOS 26.0, *) { inputBar.padding(.horizontal, 12).padding(.bottom, 6) }
-        }
         .task {
             viewModel.load()
             viewModel.startListening()
@@ -87,30 +81,6 @@ struct ChatView: View {
         }
     }
 
-    private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Button {} label: { Image(systemName: "plus.circle.fill").font(.system(size: 28)).foregroundStyle(.secondary) }
-            TextField("Сообщение", text: $text)
-                .focused($focused)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 9)
-                .background(Color(.secondarySystemBackground), in: Capsule())
-            Button {
-                let value = text
-                text = ""
-                viewModel.send(text: value)
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 29))
-                    .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : Color.appAccent)
-            }
-            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isSending)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color(.systemBackground))
-        .ifAvailableGlass()
-    }
 }
 
 private struct MessageBubble: View {
@@ -121,29 +91,62 @@ private struct MessageBubble: View {
         HStack(alignment: .bottom, spacing: 6) {
             if message.isOutgoing { Spacer(minLength: 48) }
             if !message.isOutgoing && isChat { Avatar(user: sender, size: 26) }
-            VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 3) {
-                if !message.isOutgoing && isChat, let sender = message.senderName { Text(sender).font(.caption2).foregroundStyle(.secondary) }
-                Text(message.isDeleted ? "Сообщение удалено" : message.text)
-                    .font(.system(size: 16))
-                    .foregroundStyle(message.isDeleted ? .secondary : .primary)
-                    .padding(.horizontal, 13).padding(.vertical, 9)
-                    .background(message.isOutgoing ? Color.appAccent : Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .foregroundColor(message.isOutgoing ? .white : .primary)
-                Text(message.date, style: .time).font(.caption2).foregroundStyle(.secondary)
-            }
+            bubble
             if !message.isOutgoing { Spacer(minLength: 48) }
         }
+    }
+
+    private var bubble: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if !message.isOutgoing, let senderName = message.senderName {
+                Text(senderName)
+                    .font(.caption.weight(.semibold))
+            }
+
+            if displaysTimeBesideText {
+                HStack(alignment: .lastTextBaseline, spacing: 7) {
+                    messageText
+                    timeLabel
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    messageText
+                    HStack {
+                        Spacer(minLength: 0)
+                        timeLabel
+                    }
+                }
+            }
+        }
+        .foregroundStyle(message.isOutgoing ? .white : .primary)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 9)
+        .background(
+            message.isOutgoing ? Color.appAccent : Color(.secondarySystemBackground),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+    }
+
+    private var messageText: some View {
+        Text(message.isDeleted ? "Сообщение удалено" : message.text)
+            .font(.system(size: 16))
+            .foregroundStyle(message.isOutgoing ? .white : (message.isDeleted ? .secondary : .primary))
+    }
+
+    private var timeLabel: some View {
+        Text(message.date, style: .time)
+            .font(.caption2)
+            .foregroundStyle(message.isOutgoing ? .white.opacity(0.75) : .secondary)
+    }
+
+    private var displaysTimeBesideText: Bool {
+        message.text.count <= 25 && !message.isDeleted
     }
 
     private var sender: User { User(uid: 0, username: "", displayName: message.senderName ?? "", isGroup: false) }
 }
 
 private extension View {
-    @ViewBuilder func ifAvailableGlass() -> some View {
-        if #available(iOS 26.0, *) { self.glassEffect(.regular, in: Capsule()) }
-        else { self }
-    }
-
     @ViewBuilder func hideMessagesTabBar() -> some View {
         if #available(iOS 16.0, *) {
             self.toolbar(.hidden, for: .tabBar)
