@@ -118,6 +118,15 @@ struct ChatView: View {
         let maximumLines = max(1, Int((maxHeight - 20) / 22))
 
         return HStack(alignment: .bottom, spacing: 8) {
+            Button {} label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 25, height: 25)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Добавить вложение")
+
             TextField("Сообщение", text: $text, axis: .vertical)
                 .font(.body)
                 .lineLimit(1...maximumLines)
