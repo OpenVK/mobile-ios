@@ -8,6 +8,8 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var isLoadingOlder = false
     @Published var errorMessage: String?
     @Published var typingText: String?
+    @Published private(set) var stickerPacks: [VKStickerPack] = []
+    @Published private(set) var isLoadingStickerPacks = false
     @Published private(set) var isPeerOnline: Bool
     @Published private(set) var peerLastSeen: Date?
 
@@ -85,6 +87,30 @@ final class ChatViewModel: ObservableObject {
                 }
             case .failure:
                 self.messages[index] = pendingMessage.updatingDeliveryStatus(.failed)
+            }
+        }
+    }
+
+    func loadStickerPacks() {
+        guard stickerPacks.isEmpty, !isLoadingStickerPacks else { return }
+        isLoadingStickerPacks = true
+        service.fetchStickerPacks { [weak self] result in
+            guard let self else { return }
+            if case .success(let packs) = result { self.stickerPacks = packs }
+            self.isLoadingStickerPacks = false
+        }
+    }
+
+    func send(sticker: VKSticker) {
+        guard let stickerID = sticker.identifier else { return }
+        let pendingMessage = ChatMessage.pending(sticker: sticker)
+        messages.append(pendingMessage)
+
+        service.sendSticker(peerID: conversation.id, stickerID: stickerID) { [weak self] result in
+            guard let self, let index = self.messages.firstIndex(where: { $0.id == pendingMessage.id }) else { return }
+            switch result {
+            case .success(let id): self.messages[index] = pendingMessage.updatingDeliveryStatus(.unread, id: id)
+            case .failure: self.messages[index] = pendingMessage.updatingDeliveryStatus(.failed)
             }
         }
     }

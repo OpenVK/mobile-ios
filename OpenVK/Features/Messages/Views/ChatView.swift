@@ -6,6 +6,9 @@ struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @State private var text = ""
     @State private var composerHeight: CGFloat = 40
+    @State private var isEmojiPanelPresented = false
+    @State private var recentStickers: [VKSticker] = []
+    @FocusState private var isComposerFocused: Bool
     @Binding var selectedMedia: Attachment?
     @Binding var owningPost: Post?
 
@@ -160,7 +163,29 @@ struct ChatView: View {
     private func messageComposer(maxHeight: CGFloat) -> some View {
         let maximumLines = max(1, Int((maxHeight - 20) / 22))
 
-        return HStack(alignment: .bottom, spacing: 8) {
+        return VStack(spacing: 8) {
+            composerControls(maximumLines: maximumLines)
+
+            if isEmojiPanelPresented {
+                StickerPickerPanel(
+                    packs: viewModel.stickerPacks,
+                    recentStickers: recentStickers,
+                    isLoading: viewModel.isLoadingStickerPacks,
+                    onStickerSelected: sendSticker
+                )
+                    .frame(height: min(280, maxHeight - 56))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isEmojiPanelPresented)
+        .onChange(of: isEmojiPanelPresented) { isPresented in
+            if isPresented { viewModel.loadStickerPacks() }
+        }
+    }
+
+    @available(iOS 26.0, *)
+    private func composerControls(maximumLines: Int) -> some View {
+        HStack(alignment: .bottom, spacing: 8) {
             Button {} label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .semibold))
@@ -173,10 +198,29 @@ struct ChatView: View {
             TextField("Сообщение", text: $text, axis: .vertical)
                 .font(.body)
                 .lineLimit(1...maximumLines)
-                .padding(.horizontal, 14)
+                .focused($isComposerFocused)
+                .padding(.leading, 14)
+                .padding(.trailing, 48)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(alignment: .trailing) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isEmojiPanelPresented.toggle()
+                            isComposerFocused = !isEmojiPanelPresented
+                        }
+                    } label: {
+                        Image(systemName: isEmojiPanelPresented ? "keyboard" : "face.smiling")
+                            .font(.system(size: 19, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, height: 40)
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 4)
+                    .accessibilityLabel("Эмодзи")
+                }
 
             if hasMessageText {
                 Button {
@@ -202,6 +246,13 @@ struct ChatView: View {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private func sendSticker(_ sticker: VKSticker) {
+        viewModel.send(sticker: sticker)
+        recentStickers.removeAll { $0.identifier == sticker.identifier }
+        recentStickers.insert(sticker, at: 0)
+        recentStickers = Array(recentStickers.prefix(32))
+    }
+
     private func openPhotoViewer(for photo: ChatPhoto) {
         let photos = viewModel.messages.flatMap(\.photos)
         let attachments = photos.map {
@@ -225,6 +276,92 @@ struct ChatView: View {
         }
     }
 
+}
+
+@available(iOS 26.0, *)
+private struct StickerPickerPanel: View {
+    let packs: [VKStickerPack]
+    let recentStickers: [VKSticker]
+    let isLoading: Bool
+    let onStickerSelected: (VKSticker) -> Void
+
+    private let grid = [GridItem(.adaptive(minimum: 62), spacing: 6)]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            packTabs
+            Divider()
+            content
+        }
+        .background(Color(.secondarySystemBackground).opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var packTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                if !recentStickers.isEmpty {
+                    Image(systemName: "clock.fill")
+                        .foregroundStyle(Color.appAccent)
+                        .frame(width: 38, height: 38)
+                        .background(Color.appAccent.opacity(0.12), in: Circle())
+                }
+                ForEach(packs) { pack in
+                    stickerImage(url: pack.coverURL)
+                        .frame(width: 38, height: 38)
+                        .background(Color.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .accessibilityLabel(pack.displayName)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+        }
+        .frame(height: 52)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isLoading && packs.isEmpty {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if packs.isEmpty {
+            ContentUnavailableView("Нет стикерпаков", systemImage: "face.smiling", description: Text("Установленные стикерпаки появятся здесь."))
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if !recentStickers.isEmpty { stickerSection(title: "Недавние", stickers: recentStickers) }
+                    ForEach(packs) { pack in
+                        stickerSection(title: pack.displayName, stickers: pack.stickers ?? [])
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    private func stickerSection(title: String, stickers: [VKSticker]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            LazyVGrid(columns: grid, spacing: 6) {
+                ForEach(stickers, id: \.identifier) { sticker in
+                    Button { onStickerSelected(sticker) } label: {
+                        stickerImage(url: sticker.thumbnailURL).frame(width: 62, height: 62)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func stickerImage(url: URL?) -> some View {
+        if let url {
+            CachedRemoteImage(url: url, contentMode: .fit) { ProgressView() }
+        } else {
+            Image(systemName: "face.smiling").foregroundStyle(.secondary)
+        }
+    }
 }
 
 private struct TypingStatusView: View {

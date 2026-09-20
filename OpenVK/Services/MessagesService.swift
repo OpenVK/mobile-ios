@@ -9,6 +9,8 @@ protocol MessagesServiceProtocol {
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func fetchHistory(peerID: Int, offset: Int, count: Int, completion: @escaping (Result<MessagesPage, Error>) -> Void)
     func sendMessage(peerID: Int, text: String, completion: @escaping (Result<Int, Error>) -> Void)
+    func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void)
+    func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
     func setTyping(peerID: Int)
     func markAsRead(peerID: Int)
 }
@@ -47,6 +49,27 @@ final class MessagesService: MessagesServiceProtocol {
             as: Int.self,
             completion: { result in completion(result.mapError { $0 as Error }) }
         )
+    }
+
+    func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void) {
+        client.call(
+            method: "messages.send",
+            parameters: ["peer_id": String(peerID), "sticker_id": String(stickerID), "random_id": String(Int.random(in: 1...Int.max))],
+            httpMethod: "POST",
+            as: Int.self,
+            completion: { result in completion(result.mapError { $0 as Error }) }
+        )
+    }
+
+    func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void) {
+        client.call(
+            method: "stickers.get",
+            parameters: ["count": "100"],
+            httpMethod: "GET",
+            as: VKStickerPacksResponse.self
+        ) { result in
+            completion(result.map { $0.items ?? [] }.mapError { $0 as Error })
+        }
     }
 
     func setTyping(peerID: Int) {

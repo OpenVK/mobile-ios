@@ -115,6 +115,10 @@ struct ChatPhoto: Identifiable, Hashable {
 }
 
 struct VKSticker: Decodable {
+    let id: Int?
+    let stickerID: Int?
+    let productID: Int?
+    let emoji: String?
     let photo128: String?
     let photo256: String?
     let photo512: String?
@@ -123,6 +127,10 @@ struct VKSticker: Decodable {
     let animations: [VKStickerAnimation]?
 
     private enum CodingKeys: String, CodingKey {
+        case id
+        case stickerID = "sticker_id"
+        case productID = "product_id"
+        case emoji
         case photo128 = "photo_128"
         case photo256 = "photo_256"
         case photo512 = "photo_512"
@@ -146,6 +154,19 @@ struct VKSticker: Decodable {
             .compactMap(URL.init(string:))
             .first
     }
+
+    var identifier: Int? { stickerID ?? id }
+
+    var thumbnailURL: URL? {
+        let imageFromList = images?
+            .sorted { abs($0.width - 128) < abs($1.width - 128) }
+            .first?
+            .url
+        return [imageFromList, photo128, photo256, photo512]
+            .compactMap { $0 }
+            .compactMap(URL.init(string:))
+            .first
+    }
 }
 
 struct VKStickerImage: Decodable {
@@ -155,6 +176,27 @@ struct VKStickerImage: Decodable {
 
 struct VKStickerAnimation: Decodable {
     let url: String?
+}
+
+struct VKStickerPack: Decodable, Identifiable {
+    let id: Int
+    let name: String?
+    let title: String?
+    let photo128: String?
+    let stickers: [VKSticker]?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, title, stickers
+        case photo128 = "photo_128"
+    }
+
+    var displayName: String { name ?? title ?? "Стикерпаки" }
+    var coverURL: URL? { stickers?.first?.thumbnailURL ?? URL(string: photo128 ?? "") }
+}
+
+struct VKStickerPacksResponse: Decodable {
+    let count: Int?
+    let items: [VKStickerPack]?
 }
 
 struct VKMessagesHistoryResponse: Decodable {
@@ -313,6 +355,25 @@ struct ChatMessage: Identifiable, Hashable {
             attachmentTypes: [],
             stickerURL: nil,
             stickerAnimationURL: nil,
+            photos: [],
+            systemEventText: nil,
+            isDeleted: false,
+            deliveryStatus: .sending
+        )
+    }
+
+    static func pending(sticker: VKSticker) -> ChatMessage {
+        ChatMessage(
+            id: -Int.random(in: 1...Int.max),
+            text: "",
+            date: Date(),
+            isOutgoing: true,
+            senderID: AuthService.shared.currentUser?.uid ?? 0,
+            senderName: nil,
+            senderAvatarURL: nil,
+            attachmentTypes: ["sticker"],
+            stickerURL: sticker.imageURL,
+            stickerAnimationURL: sticker.animationURL,
             photos: [],
             systemEventText: nil,
             isDeleted: false,
