@@ -521,7 +521,7 @@ final class ProfileService: ProfileServiceProtocol {
             author: author,
             platform: item.postSource?.platform,
             timeAgo: timeAgo,
-            text: item.text ?? "",
+            text: (item.text ?? "").htmlEntityDecoded,
             attachments: localAttachments,
             likes: item.likes?.count ?? 0,
             comments: item.comments?.count ?? 0,

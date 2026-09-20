@@ -526,7 +526,7 @@ final class FeedService: FeedServiceProtocol {
             wallOwner: wallOwner,
             platform: item.postSource?.platform,
             timeAgo: timeAgo,
-            text: item.text ?? "",
+            text: (item.text ?? "").htmlEntityDecoded,
             hasImage: localAttachments.contains(where: { if case .image = $0 { return true } else if case .remoteImage = $0 { return true } else { return false } }),
             attachments: localAttachments,
             likes: item.likes?.count ?? 0,
