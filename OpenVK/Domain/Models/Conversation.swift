@@ -119,12 +119,16 @@ struct VKSticker: Decodable {
     let photo256: String?
     let photo512: String?
     let images: [VKStickerImage]?
+    let animationURLString: String?
+    let animations: [VKStickerAnimation]?
 
     private enum CodingKeys: String, CodingKey {
         case photo128 = "photo_128"
         case photo256 = "photo_256"
         case photo512 = "photo_512"
         case images
+        case animationURLString = "animation_url"
+        case animations
     }
 
     var imageURL: URL? {
@@ -135,11 +139,22 @@ struct VKSticker: Decodable {
             .compactMap(URL.init(string:))
             .first
     }
+
+    var animationURL: URL? {
+        [animationURLString, animations?.first?.url]
+            .compactMap { $0 }
+            .compactMap(URL.init(string:))
+            .first
+    }
 }
 
 struct VKStickerImage: Decodable {
     let url: String?
     let width: Int
+}
+
+struct VKStickerAnimation: Decodable {
+    let url: String?
 }
 
 struct VKMessagesHistoryResponse: Decodable {
@@ -211,6 +226,7 @@ struct ChatMessage: Identifiable, Hashable {
     let senderAvatarURL: URL?
     let attachmentTypes: [String]
     let stickerURL: URL?
+    let stickerAnimationURL: URL?
     let photos: [ChatPhoto]
     let systemEventText: String?
     let isDeleted: Bool
@@ -246,6 +262,9 @@ struct ChatMessage: Identifiable, Hashable {
         stickerURL = body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.count == 1
             ? attachments.first?.sticker?.imageURL
             : nil
+        stickerAnimationURL = body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.count == 1
+            ? attachments.first?.sticker?.animationURL
+            : nil
         isDeleted = message.deleted == 1
         deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
     }
@@ -260,6 +279,7 @@ struct ChatMessage: Identifiable, Hashable {
         senderAvatarURL: URL?,
         attachmentTypes: [String],
         stickerURL: URL?,
+        stickerAnimationURL: URL?,
         photos: [ChatPhoto],
         systemEventText: String?,
         isDeleted: Bool,
@@ -274,6 +294,7 @@ struct ChatMessage: Identifiable, Hashable {
         self.senderAvatarURL = senderAvatarURL
         self.attachmentTypes = attachmentTypes
         self.stickerURL = stickerURL
+        self.stickerAnimationURL = stickerAnimationURL
         self.photos = photos
         self.systemEventText = systemEventText
         self.isDeleted = isDeleted
@@ -291,6 +312,7 @@ struct ChatMessage: Identifiable, Hashable {
             senderAvatarURL: nil,
             attachmentTypes: [],
             stickerURL: nil,
+            stickerAnimationURL: nil,
             photos: [],
             systemEventText: nil,
             isDeleted: false,
@@ -309,6 +331,7 @@ struct ChatMessage: Identifiable, Hashable {
             senderAvatarURL: senderAvatarURL,
             attachmentTypes: attachmentTypes,
             stickerURL: stickerURL,
+            stickerAnimationURL: stickerAnimationURL,
             photos: photos,
             systemEventText: systemEventText,
             isDeleted: isDeleted,

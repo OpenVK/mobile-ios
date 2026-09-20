@@ -1,4 +1,5 @@
 import SwiftUI
+import Lottie
 
 struct ChatView: View {
     let conversation: Conversation
@@ -285,7 +286,7 @@ private struct MessageBubble: View {
     @ViewBuilder
     private var messageContent: some View {
         if let stickerURL = message.stickerURL {
-            sticker(url: stickerURL)
+            sticker(url: stickerURL, animationURL: message.stickerAnimationURL)
         } else if !message.photos.isEmpty {
             photoBubble
         } else {
@@ -320,13 +321,10 @@ private struct MessageBubble: View {
         }
     }
 
-    private func sticker(url: URL) -> some View {
+    private func sticker(url: URL, animationURL: URL?) -> some View {
         ZStack(alignment: .bottomTrailing) {
-            CachedRemoteImage(url: url, contentMode: .fit) {
-                ProgressView()
-                    .frame(width: 160, height: 160)
-            }
-            .frame(width: 160, height: 160)
+            StickerArtwork(staticURL: url, animationURL: animationURL)
+                .frame(width: 160, height: 160)
 
             stickerMetadata
                 .padding(4)
@@ -465,6 +463,103 @@ private struct MessageBubble: View {
             avatarURL: message.senderAvatarURL,
             isGroup: false
         )
+    }
+}
+
+private struct StickerArtwork: View {
+    let staticURL: URL
+    let animationURL: URL?
+    @State private var animationIsLoaded = false
+
+    var body: some View {
+        ZStack {
+            CachedRemoteImage(url: staticURL, contentMode: .fit) {
+                ProgressView()
+                    .frame(width: 160, height: 160)
+            }
+            .frame(width: 160, height: 160)
+            .opacity(animationURL == nil || !animationIsLoaded ? 1 : 0)
+
+            if let animationURL {
+                AnimatedStickerView(animationURL: animationURL) {
+                    animationIsLoaded = true
+                }
+                .frame(width: 160, height: 160)
+                .clipped()
+                .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+private struct AnimatedStickerView: UIViewRepresentable {
+    let animationURL: URL
+    let onLoaded: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> LottieStickerContainerView {
+        let view = LottieStickerContainerView()
+        load(animationURL, into: view.animationView, coordinator: context.coordinator)
+        return view
+    }
+
+    func updateUIView(_ view: LottieStickerContainerView, context: Context) {
+        guard context.coordinator.loadedURL != animationURL else { return }
+        load(animationURL, into: view.animationView, coordinator: context.coordinator)
+    }
+
+    static func dismantleUIView(_ view: LottieStickerContainerView, coordinator: Coordinator) {
+        view.animationView.stop()
+    }
+
+    private func load(_ url: URL, into view: LottieAnimationView, coordinator: Coordinator) {
+        coordinator.loadedURL = url
+        view.stop()
+        view.animation = nil
+        LottieAnimation.loadedFrom(url: url) { animation in
+            DispatchQueue.main.async {
+                guard coordinator.loadedURL == url, let animation else { return }
+                view.animation = animation
+                view.play()
+                onLoaded()
+            }
+        }
+    }
+
+    final class Coordinator {
+        var loadedURL: URL?
+    }
+}
+
+private final class LottieStickerContainerView: UIView {
+    let animationView = LottieAnimationView()
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        backgroundColor = .clear
+
+        animationView.translatesAutoresizingMaskIntoConstraints = false
+        animationView.contentMode = .scaleAspectFit
+        animationView.backgroundColor = .clear
+        animationView.loopMode = .loop
+        animationView.backgroundBehavior = .pauseAndRestore
+        addSubview(animationView)
+        NSLayoutConstraint.activate([
+            animationView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            animationView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            animationView.topAnchor.constraint(equalTo: topAnchor),
+            animationView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
 

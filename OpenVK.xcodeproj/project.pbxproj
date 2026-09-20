@@ -12,6 +12,7 @@
 		241DA14C300259B40038F8AA /* OpenVKTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 241DA14B300259B40038F8AA /* OpenVKTests.swift */; };
 		241DA157300259B40038F8AA /* OpenVKUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 241DA156300259B40038F8AA /* OpenVKUITests.swift */; };
 		244443BB30236F6A00D93264 /* VLCKit in Frameworks */ = {isa = PBXBuildFile; productRef = 244443BA30236F6A00D93264 /* VLCKit */; };
+		24A100000000000000000101 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 24A100000000000000000102 /* Lottie */; };
 		24880032E1813BD284AFA936 /* FeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2488D2DEEBE9EB507069407B /* FeedView.swift */; };
 		248800371806ECA5F4832FA4 /* NavigationPanelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24889DC0ED7A29B2124EF520 /* NavigationPanelManager.swift */; };
 		248800B3C10710A55A06866E /* SearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24885C9AAF0AF9425CF32BDF /* SearchService.swift */; };
@@ -278,6 +279,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				244443BB30236F6A00D93264 /* VLCKit in Frameworks */,
+				24A100000000000000000101 /* Lottie in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -911,6 +913,7 @@
 			mainGroup = 241DA12D300259B30038F8AA;
 			packageReferences = (
 				244443B830236E4500D93264 /* XCRemoteSwiftPackageReference "VLCKit" */,
+				24A100000000000000000103 /* XCRemoteSwiftPackageReference "lottie-spm" */,
 			);
 			productRefGroup = 241DA137300259B30038F8AA /* Products */;
 			projectDirPath = "";
@@ -1395,6 +1398,14 @@
 				minimumVersion = "4.0.0-a22";
 			};
 		};
+		24A100000000000000000103 /* XCRemoteSwiftPackageReference "lottie-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/airbnb/lottie-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = "4.6.0";
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1402,6 +1413,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 244443B830236E4500D93264 /* XCRemoteSwiftPackageReference "VLCKit" */;
 			productName = VLCKit;
+		};
+		24A100000000000000000102 /* Lottie */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 24A100000000000000000103 /* XCRemoteSwiftPackageReference "lottie-spm" */;
+			productName = Lottie;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
