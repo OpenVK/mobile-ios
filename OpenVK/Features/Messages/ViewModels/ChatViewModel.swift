@@ -183,7 +183,7 @@ final class ChatViewModel: ObservableObject {
         updateTypingText()
         resolveTypingNames(for: activeIDs)
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 4_100_000_000)
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard let self else { return }
             let now = Date()
             let expiredIDs = self.typingExpirations.filter { $0.value <= now }.map(\.key)
@@ -232,7 +232,7 @@ final class ChatViewModel: ObservableObject {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 self.typingNames[profile.id] = name.isEmpty
                     ? (profile.screenName ?? "Пользователь \(profile.id)")
-                    : (name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? name)
+                    : name
             }
             self.updateTypingText()
         }
