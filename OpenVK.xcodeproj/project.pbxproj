@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		24A100000000000000000201 /* Web_static_audio_notify.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 24A100000000000000000202 /* Web_static_audio_notify.mp3 */; };
 		241DA13E300259B40038F8AA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 241DA13D300259B40038F8AA /* Assets.xcassets */; };
 		241DA141300259B40038F8AA /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 241DA140300259B40038F8AA /* Preview Assets.xcassets */; };
 		241DA14C300259B40038F8AA /* OpenVKTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 241DA14B300259B40038F8AA /* OpenVKTests.swift */; };
@@ -145,6 +146,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		24A100000000000000000202 /* Web_static_audio_notify.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = Web_static_audio_notify.mp3; sourceTree = "<group>"; };
 		241DA136300259B30038F8AA /* OpenVK.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenVK.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		241DA13D300259B40038F8AA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		241DA140300259B40038F8AA /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
@@ -572,6 +574,7 @@
 		248865F561E530C69D9937A9 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				24A100000000000000000202 /* Web_static_audio_notify.mp3 */,
 				24885F7776DB332A8D825637 /* AppConfig.swift */,
 				2488EAF352466A8672BCAEDC /* Strings.swift */,
 			);
@@ -931,6 +934,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				24A100000000000000000201 /* Web_static_audio_notify.mp3 in Resources */,
 				241DA141300259B40038F8AA /* Preview Assets.xcassets in Resources */,
 				241DA13E300259B40038F8AA /* Assets.xcassets in Resources */,
 			);

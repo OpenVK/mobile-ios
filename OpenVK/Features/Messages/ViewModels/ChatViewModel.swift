@@ -24,6 +24,7 @@ final class ChatViewModel: ObservableObject {
     private var lastTypingSentAt = Date.distantPast
     private var typingExpirations: [Int: Date] = [:]
     private var typingNames: [Int: String] = [:]
+    private var didLoadMessages = false
 
     init(conversation: Conversation, service: MessagesService = .shared) {
         self.conversation = conversation
@@ -45,7 +46,15 @@ final class ChatViewModel: ObservableObject {
             guard let self else { return }
             switch result {
             case .success(let page):
+                let existingIDs = Set(self.messages.map(\.id))
+                let newIncomingMessageArrived = self.didLoadMessages && page.messages.contains {
+                    !existingIDs.contains($0.id) && !$0.isOutgoing
+                }
                 self.messages = self.mergingTransientMessages(into: page.messages)
+                self.didLoadMessages = true
+                if newIncomingMessageArrived {
+                    HapticManager.playMessageSound()
+                }
                 if page.messages.contains(where: { $0.endsChatParticipation }) {
                     self.canSendMessages = false
                 }
@@ -201,10 +210,16 @@ final class ChatViewModel: ObservableObject {
             return
         }
         if count == 1 {
-            typingText = "\(typingNames[ids[0]] ?? "Пользователь") печатает"
+            guard let name = typingNames[ids[0]] else {
+                typingText = nil
+                return
+            }
+            typingText = "\(name) печатает"
         } else if count == 2 {
-            let first = typingNames[ids[0]] ?? "Пользователь"
-            let second = typingNames[ids[1]] ?? "Пользователь"
+            guard let first = typingNames[ids[0]], let second = typingNames[ids[1]] else {
+                typingText = nil
+                return
+            }
             typingText = "\(first) и \(second) печатают"
         } else {
             let lastTwo = count % 100
