@@ -179,7 +179,8 @@ final class MessagesViewModel: ObservableObject {
                             lastMessageId: item.lastMessageId,
                             lastMessageReadState: item.lastMessageReadState,
                             isChat: item.isChat,
-                            isChatMember: item.isChatMember
+                            isChatMember: item.isChatMember,
+                            chatMemberCount: item.chatMemberCount
                         )
                     }
                     AuthService.shared.fetchCounters()

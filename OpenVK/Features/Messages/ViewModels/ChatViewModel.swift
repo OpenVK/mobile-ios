@@ -22,6 +22,8 @@ final class ChatViewModel: ObservableObject {
     private var hasMore = true
     private var observer: NSObjectProtocol?
     private var lastTypingSentAt = Date.distantPast
+    private var typingExpirations: [Int: Date] = [:]
+    private var typingNames: [Int: String] = [:]
 
     init(conversation: Conversation, service: MessagesService = .shared) {
         self.conversation = conversation
@@ -173,11 +175,66 @@ final class ChatViewModel: ObservableObject {
         } else {
             guard !conversation.isChat, ids.contains(abs(conversation.peer.uid ?? 0)) else { return }
         }
-        if ids.count == 1 { typingText = "Печатает" }
-        else { typingText = "Печатают (ids.count) человека" }
+        let currentUserID = AuthService.shared.currentUser?.uid
+        let activeIDs = ids.filter { $0 != currentUserID }
+        guard !activeIDs.isEmpty else { return }
+        let expiration = Date().addingTimeInterval(4)
+        for id in activeIDs { typingExpirations[id] = expiration }
+        updateTypingText()
+        resolveTypingNames(for: activeIDs)
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            self?.typingText = nil
+            try? await Task.sleep(nanoseconds: 4_100_000_000)
+            guard let self else { return }
+            let now = Date()
+            let expiredIDs = self.typingExpirations.filter { $0.value <= now }.map(\.key)
+            self.typingExpirations = self.typingExpirations.filter { $0.value > now }
+            for id in expiredIDs { self.typingNames.removeValue(forKey: id) }
+            self.updateTypingText()
+        }
+    }
+
+    private func updateTypingText() {
+        let ids = Array(typingExpirations.keys).sorted()
+        let count = ids.count
+        guard count > 0 else {
+            typingText = nil
+            return
+        }
+        if count == 1 {
+            typingText = "\(typingNames[ids[0]] ?? "Пользователь") печатает"
+        } else if count == 2 {
+            let first = typingNames[ids[0]] ?? "Пользователь"
+            let second = typingNames[ids[1]] ?? "Пользователь"
+            typingText = "\(first) и \(second) печатают"
+        } else {
+            let lastTwo = count % 100
+            let last = count % 10
+            let noun = (11...14).contains(lastTwo) ? "человек" : ((2...4).contains(last) ? "человека" : "человек")
+            typingText = "Печатают \(count) \(noun)"
+        }
+    }
+
+    private func resolveTypingNames(for userIDs: [Int]) {
+        let ids = Array(Set(userIDs)).filter { $0 > 0 }
+        guard !ids.isEmpty else { return }
+        APIClient.shared.call(
+            method: "users.get",
+            parameters: [
+                "user_ids": ids.map(String.init).joined(separator: ","),
+                "fields": "first_name,last_name,screen_name"
+            ],
+            httpMethod: "GET",
+            as: [VKUserProfile].self
+        ) { [weak self] result in
+            guard let self, case .success(let profiles) = result else { return }
+            for profile in profiles {
+                let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                self.typingNames[profile.id] = name.isEmpty
+                    ? (profile.screenName ?? "Пользователь \(profile.id)")
+                    : (name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? name)
+            }
+            self.updateTypingText()
         }
     }
 

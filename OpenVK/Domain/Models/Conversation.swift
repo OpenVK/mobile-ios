@@ -18,6 +18,7 @@ struct Conversation: Identifiable, Hashable {
 
     var isChat: Bool
     var isChatMember: Bool = true
+    var chatMemberCount: Int? = nil
     var isGroup: Bool { peer.isGroup == true }
 }
 
@@ -72,6 +73,7 @@ struct VKChatSettings: Decodable {
     let title: String?
     let photo100: String?
     let state: String?
+    let membersCount: Int?
 }
 
 struct VKConversationCanWrite: Decodable {

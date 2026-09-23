@@ -86,8 +86,12 @@ struct ChatView: View {
                 Text(conversation.peer.displayName)
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
-                if !conversation.isChat, let typing = viewModel.typingText {
+                if let typing = viewModel.typingText {
                     TypingStatusView(text: typing)
+                } else if conversation.isChat, let count = conversation.chatMemberCount {
+                    Text("\(count) \(memberCountWord(count))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 } else if let presence = viewModel.peerPresenceText {
                     Text(presence)
                         .font(.caption2)
@@ -97,6 +101,15 @@ struct ChatView: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private func memberCountWord(_ count: Int) -> String {
+        let lastTwo = count % 100
+        let last = count % 10
+        if (11...14).contains(lastTwo) { return "участников" }
+        if last == 1 { return "участник" }
+        if (2...4).contains(last) { return "участника" }
+        return "участников"
     }
 
     private var messageHistory: some View {

@@ -233,7 +233,8 @@ final class MessagesService: MessagesServiceProtocol {
             isChat: isChat,
             isChatMember: !["left", "kicked"].contains(item.conversation.chatSettings?.state?.lowercased())
                 && item.conversation.canWrite?.allowed != false
-                && item.conversation.canWrite?.reason != 915
+                && item.conversation.canWrite?.reason != 915,
+            chatMemberCount: item.conversation.chatSettings?.membersCount
         )
     }
 
