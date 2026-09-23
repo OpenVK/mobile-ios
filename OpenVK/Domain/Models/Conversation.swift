@@ -17,6 +17,7 @@ struct Conversation: Identifiable, Hashable {
     let lastMessageReadState: Int?
 
     var isChat: Bool
+    var isChatMember: Bool = true
     var isGroup: Bool { peer.isGroup == true }
 }
 
@@ -59,6 +60,7 @@ struct VKConversationInfo: Decodable {
     let lastMessageId: Int?
     let unreadCount: Int?
     let chatSettings: VKChatSettings?
+    let canWrite: VKConversationCanWrite?
 }
 
 struct VKConversationPeer: Decodable {
@@ -69,6 +71,12 @@ struct VKConversationPeer: Decodable {
 struct VKChatSettings: Decodable {
     let title: String?
     let photo100: String?
+    let state: String?
+}
+
+struct VKConversationCanWrite: Decodable {
+    let allowed: Bool?
+    let reason: Int?
 }
 
 struct VKConversationMessage: Decodable {
@@ -273,6 +281,7 @@ struct ChatMessage: Identifiable, Hashable {
     let systemEventText: String?
     let isDeleted: Bool
     let deliveryStatus: MessageDeliveryStatus?
+    let endsChatParticipation: Bool
 
     init(message: VKHistoryMessage, profiles: [VKUserProfile]) {
         let senderID = message.fromId ?? 0
@@ -298,9 +307,13 @@ struct ChatMessage: Identifiable, Hashable {
         systemEventText = Self.systemEventText(
             action: message.action,
             actionMemberID: message.actionMid,
+            actorID: senderID,
             actorName: name.isEmpty ? "Пользователь" : name,
             profiles: profiles
         )
+        let actionType = message.action?.type?.lowercased()
+        endsChatParticipation = actionType == "chat_kick_user"
+            && message.action?.memberId == AuthService.shared.currentUser?.uid
         stickerURL = body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.count == 1
             ? attachments.first?.sticker?.imageURL
             : nil
@@ -325,7 +338,8 @@ struct ChatMessage: Identifiable, Hashable {
         photos: [ChatPhoto],
         systemEventText: String?,
         isDeleted: Bool,
-        deliveryStatus: MessageDeliveryStatus?
+        deliveryStatus: MessageDeliveryStatus?,
+        endsChatParticipation: Bool = false
     ) {
         self.id = id
         self.text = text
@@ -341,6 +355,7 @@ struct ChatMessage: Identifiable, Hashable {
         self.systemEventText = systemEventText
         self.isDeleted = isDeleted
         self.deliveryStatus = deliveryStatus
+        self.endsChatParticipation = endsChatParticipation
     }
 
     static func pending(text: String) -> ChatMessage {
@@ -416,6 +431,7 @@ struct ChatMessage: Identifiable, Hashable {
     private static func systemEventText(
         action: VKMessageAction?,
         actionMemberID: Int?,
+        actorID: Int,
         actorName: String,
         profiles: [VKUserProfile]
     ) -> String? {
@@ -439,6 +455,14 @@ struct ChatMessage: Identifiable, Hashable {
         case "chat_invite_user", "chat_invite_user_by_link":
             return "\(actorName) пригласил(а) \(memberName)"
         case "chat_kick_user":
+            if memberID == AuthService.shared.currentUser?.uid {
+                return actorID == AuthService.shared.currentUser?.uid
+                    ? "Вы покинули беседу"
+                    : "Вас исключил из беседы \(actorName)"
+            }
+            if memberID == actorID {
+                return "\(actorName) покинул(а) беседу"
+            }
             return "\(actorName) исключил(а) \(memberName)"
         case "chat_promote_user", "chat_user_promote", "chat_admin_add", "chat_set_admin", "chat_moderator_add":
             return "\(actorName) назначил(а) \(memberName) администратором"

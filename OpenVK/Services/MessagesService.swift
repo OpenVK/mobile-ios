@@ -13,6 +13,9 @@ protocol MessagesServiceProtocol {
     func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
     func setTyping(peerID: Int)
     func markAsRead(peerID: Int)
+    func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func deleteConversation(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
 }
 
 final class MessagesService: MessagesServiceProtocol {
@@ -83,6 +86,39 @@ final class MessagesService: MessagesServiceProtocol {
 
     func markAsRead(peerID: Int) {
         client.call(method: "messages.markAsRead", parameters: ["peer_id": String(peerID)], httpMethod: "POST", as: Int.self) { _ in }
+    }
+
+    func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.markAsRead",
+            parameters: ["peer_id": String(peerID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func deleteConversation(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.deleteConversation",
+            parameters: ["peer_id": String(peerID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.removeChatUser",
+            parameters: ["peer_id": String(peerID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
     }
 
     func fetchConversations(
@@ -194,7 +230,10 @@ final class MessagesService: MessagesServiceProtocol {
             unreadCount: item.conversation.unreadCount ?? 0,
             lastMessageId: item.conversation.lastMessageId ?? message?.id ?? 0,
             lastMessageReadState: message?.readState,
-            isChat: isChat
+            isChat: isChat,
+            isChatMember: !["left", "kicked"].contains(item.conversation.chatSettings?.state?.lowercased())
+                && item.conversation.canWrite?.allowed != false
+                && item.conversation.canWrite?.reason != 915
         )
     }
 

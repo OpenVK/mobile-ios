@@ -12,6 +12,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var isLoadingStickerPacks = false
     @Published private(set) var isPeerOnline: Bool
     @Published private(set) var peerLastSeen: Date?
+    @Published private(set) var canSendMessages: Bool
 
     let conversation: Conversation
     private let service: MessagesService
@@ -27,6 +28,7 @@ final class ChatViewModel: ObservableObject {
         self.service = service
         isPeerOnline = conversation.peer.isOnline
         peerLastSeen = nil
+        canSendMessages = !conversation.isChat || conversation.isChatMember
     }
 
     deinit {
@@ -42,6 +44,9 @@ final class ChatViewModel: ObservableObject {
             switch result {
             case .success(let page):
                 self.messages = self.mergingTransientMessages(into: page.messages)
+                if page.messages.contains(where: { $0.endsChatParticipation }) {
+                    self.canSendMessages = false
+                }
                 self.offset = page.messages.count
                 self.totalCount = page.count
                 self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
@@ -69,6 +74,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func send(text: String) {
+        guard canSendMessages else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         let pendingMessage = ChatMessage.pending(text: value)
@@ -102,6 +108,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func send(sticker: VKSticker) {
+        guard canSendMessages else { return }
         guard let stickerID = sticker.identifier else { return }
         let pendingMessage = ChatMessage.pending(sticker: sticker)
         messages.append(pendingMessage)

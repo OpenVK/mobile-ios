@@ -25,20 +25,30 @@ struct ChatView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            messageHistory
+                messageHistory
                 .overlay(alignment: .bottom) {
                     if #available(iOS 26.0, *) {
-                        messageComposer(maxHeight: geometry.size.height / 2)
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
-                            .background(
-                                GeometryReader { composerGeometry in
-                                    Color.clear.preference(
-                                        key: ComposerHeightPreferenceKey.self,
-                                        value: composerGeometry.size.height
-                                    )
-                                }
-                            )
+                        if viewModel.canSendMessages {
+                            messageComposer(maxHeight: geometry.size.height / 2)
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 8)
+                                .background(
+                                    GeometryReader { composerGeometry in
+                                        Color.clear.preference(
+                                            key: ComposerHeightPreferenceKey.self,
+                                            value: composerGeometry.size.height
+                                        )
+                                    }
+                                )
+                        } else {
+                            Text("Вы больше не можете отправлять сообщения")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(.thinMaterial, in: Capsule())
+                                .padding(.bottom, 10)
+                        }
                     }
                 }
         }

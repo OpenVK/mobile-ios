@@ -160,6 +160,88 @@ final class MessagesViewModel: ObservableObject {
         return "\(count) \(noun) печатают"
     }
 
+    func markConversationAsRead(_ conversation: Conversation) {
+        service.markConversationAsRead(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.conversations = self.conversations.map { item in
+                        guard item.id == conversation.id else { return item }
+                        return Conversation(
+                            id: item.id,
+                            peer: item.peer,
+                            lastMessage: item.lastMessage,
+                            lastMessageAuthorName: item.lastMessageAuthorName,
+                            lastMessageOutgoing: item.lastMessageOutgoing,
+                            updatedAt: item.updatedAt,
+                            unreadCount: 0,
+                            lastMessageId: item.lastMessageId,
+                            lastMessageReadState: item.lastMessageReadState,
+                            isChat: item.isChat,
+                            isChatMember: item.isChatMember
+                        )
+                    }
+                    AuthService.shared.fetchCounters()
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func deleteConversation(_ conversation: Conversation) {
+        service.deleteConversation(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.conversations.removeAll { $0.id == conversation.id }
+                    self.totalCount = max(0, self.totalCount - 1)
+                    AuthService.shared.fetchCounters()
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func leaveChat(_ conversation: Conversation, deleteChat: Bool) {
+        service.leaveChat(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    if deleteChat {
+                        self.service.deleteConversation(peerID: conversation.id) { [weak self] deleteResult in
+                            DispatchQueue.main.async {
+                                guard let self else { return }
+                                self.removeConversationLocally(conversation)
+                                if case .failure(let error) = deleteResult {
+                                    self.errorMessage = error.localizedDescription
+                                }
+                                AuthService.shared.fetchCounters()
+                            }
+                        }
+                    } else {
+                        self.removeConversationLocally(conversation)
+                        AuthService.shared.fetchCounters()
+                    }
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func removeConversationLocally(_ conversation: Conversation) {
+        let oldCount = conversations.count
+        conversations.removeAll { $0.id == conversation.id }
+        if conversations.count != oldCount {
+            totalCount = max(0, totalCount - 1)
+        }
+    }
+
     private func loadMore() {
         guard !isLoading, !isLoadingMore, hasMore else { return }
 
