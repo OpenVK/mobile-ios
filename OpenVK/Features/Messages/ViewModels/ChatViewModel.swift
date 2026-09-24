@@ -40,6 +40,7 @@ final class ChatViewModel: ObservableObject {
     private var didLoadMessages = false
     private var lastRememberedMessageID: Int?
     private var newestHistoryOffset = 0
+    private var isNearBottom = true
 
     private var positionStorageKey: String {
         let host = AppConfig.currentHost
@@ -65,6 +66,10 @@ final class ChatViewModel: ObservableObject {
         errorMessage = nil
         let savedPosition = didLoadMessages ? nil : self.savedPosition()
         let initialOffset = max(0, (savedPosition?.historyOffset ?? 0) - pageSize / 2)
+        if !didLoadMessages,
+           let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize) {
+            applyCachedPage(cachedPage, initialOffset: initialOffset, savedMessageID: savedPosition?.messageID)
+        }
         service.fetchHistory(peerID: conversation.id, offset: initialOffset, count: pageSize) { [weak self] result in
             guard let self else { return }
             switch result {
@@ -77,9 +82,13 @@ final class ChatViewModel: ObservableObject {
                 self.messages = isInitialLoad
                     ? self.mergingTransientMessages(into: page.messages)
                     : self.mergingLoadedMessages(page.messages)
+                self.prefetchMedia(for: page.messages)
                 self.didLoadMessages = true
                 if newIncomingMessageArrived {
                     HapticManager.playMessageSound()
+                    if self.isNearBottom {
+                        self.requestScroll(.bottom(animated: true))
+                    }
                 }
                 if page.messages.contains(where: { $0.endsChatParticipation }) {
                     self.canSendMessages = false
@@ -103,15 +112,13 @@ final class ChatViewModel: ObservableObject {
         guard message.id == messages.first?.id, hasMore, !isLoadingOlder else { return }
         isLoadingOlder = true
         let requestedOffset = offset
+        if let cachedPage = service.cachedHistory(peerID: conversation.id, offset: requestedOffset, count: pageSize) {
+            insertOlder(cachedPage, requestedOffset: requestedOffset, preserving: message.id)
+        }
         service.fetchHistory(peerID: conversation.id, offset: requestedOffset, count: pageSize) { [weak self] result in
             guard let self else { return }
             if case .success(let page) = result {
-                let existing = Set(self.messages.map(\.id))
-                self.messages.insert(contentsOf: page.messages.filter { !existing.contains($0.id) }, at: 0)
-                self.offset = requestedOffset + page.messages.count
-                self.totalCount = page.count
-                self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
-                self.requestScroll(.preservePosition(messageID: message.id))
+                self.insertOlder(page, requestedOffset: requestedOffset, preserving: message.id)
             }
             self.isLoadingOlder = false
         }
@@ -144,10 +151,17 @@ final class ChatViewModel: ObservableObject {
 
     func loadStickerPacks() {
         guard stickerPacks.isEmpty, !isLoadingStickerPacks else { return }
+        if let cachedPacks = service.cachedStickerPacks() {
+            stickerPacks = cachedPacks
+            prefetchStickerMedia(for: cachedPacks)
+        }
         isLoadingStickerPacks = true
         service.fetchStickerPacks { [weak self] result in
             guard let self else { return }
-            if case .success(let packs) = result { self.stickerPacks = packs }
+            if case .success(let packs) = result {
+                self.stickerPacks = packs
+                self.prefetchStickerMedia(for: packs)
+            }
             self.isLoadingStickerPacks = false
         }
     }
@@ -184,6 +198,10 @@ final class ChatViewModel: ObservableObject {
         if let data = try? JSONEncoder().encode(position) {
             UserDefaults.standard.set(data, forKey: positionStorageKey)
         }
+    }
+
+    func updateIsNearBottom(_ value: Bool) {
+        isNearBottom = value
     }
 
     var peerPresenceText: String? {
@@ -340,6 +358,41 @@ final class ChatViewModel: ObservableObject {
         }
         return (Array(messagesByID.values) + transientMessages)
             .sorted { $0.date < $1.date }
+    }
+
+    private func applyCachedPage(_ page: MessagesPage, initialOffset: Int, savedMessageID: Int?) {
+        messages = mergingTransientMessages(into: page.messages)
+        didLoadMessages = true
+        newestHistoryOffset = initialOffset
+        offset = initialOffset + page.messages.count
+        totalCount = page.count
+        hasMore = offset < totalCount && !page.messages.isEmpty
+        prefetchMedia(for: page.messages)
+        requestScroll(.initial(messageID: savedMessageID))
+    }
+
+    private func insertOlder(_ page: MessagesPage, requestedOffset: Int, preserving messageID: Int) {
+        let existing = Set(messages.map(\.id))
+        messages.insert(contentsOf: page.messages.filter { !existing.contains($0.id) }, at: 0)
+        offset = requestedOffset + page.messages.count
+        totalCount = page.count
+        hasMore = offset < totalCount && !page.messages.isEmpty
+        prefetchMedia(for: page.messages)
+        requestScroll(.preservePosition(messageID: messageID))
+    }
+
+    private func prefetchMedia(for messages: [ChatMessage]) {
+        let urls = messages.flatMap { message in
+            [message.senderAvatarURL, message.stickerURL] + message.photos.map(\.url)
+        }.compactMap { $0 }
+        ImageCache.shared.prefetchPermanently(urls)
+    }
+
+    private func prefetchStickerMedia(for packs: [VKStickerPack]) {
+        let urls = packs.flatMap { pack in
+            [pack.coverURL] + (pack.stickers ?? []).compactMap(\.thumbnailURL)
+        }.compactMap { $0 }
+        ImageCache.shared.prefetchPermanently(urls)
     }
 
     private func requestScroll(_ request: ChatScrollRequest) {

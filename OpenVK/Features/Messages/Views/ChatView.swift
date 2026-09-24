@@ -165,6 +165,12 @@ struct ChatView: View {
                 if let messageID = visibleMessage?.key {
                     viewModel.rememberPosition(messageID: messageID)
                 }
+                if let lastMessageID = viewModel.messages.last?.id,
+                   let lastFrame = frames[lastMessageID] {
+                    viewModel.updateIsNearBottom(lastFrame.maxY <= viewportHeight + 32)
+                } else if !viewModel.messages.isEmpty {
+                    viewModel.updateIsNearBottom(false)
+                }
             }
             .onChange(of: viewModel.scrollRequestID) { _ in
                 Task { @MainActor in

@@ -114,7 +114,7 @@ struct VKMessagePhoto: Decodable {
     }
 }
 
-struct ChatPhoto: Identifiable, Hashable {
+struct ChatPhoto: Identifiable, Hashable, Codable {
     let id: String
     let url: URL
 
@@ -124,7 +124,7 @@ struct ChatPhoto: Identifiable, Hashable {
     }
 }
 
-struct VKSticker: Decodable {
+struct VKSticker: Codable {
     let id: Int?
     let stickerID: Int?
     let productID: Int?
@@ -179,16 +179,16 @@ struct VKSticker: Decodable {
     }
 }
 
-struct VKStickerImage: Decodable {
+struct VKStickerImage: Codable {
     let url: String?
     let width: Int
 }
 
-struct VKStickerAnimation: Decodable {
+struct VKStickerAnimation: Codable {
     let url: String?
 }
 
-struct VKStickerPack: Decodable, Identifiable {
+struct VKStickerPack: Codable, Identifiable {
     let id: Int
     let name: String?
     let title: String?
@@ -268,7 +268,7 @@ struct MessagesPage {
     let messages: [ChatMessage]
 }
 
-struct ChatMessage: Identifiable, Hashable {
+struct ChatMessage: Identifiable, Hashable, Codable {
     let id: Int
     let text: String
     let date: Date
@@ -489,7 +489,7 @@ struct ChatMessage: Identifiable, Hashable {
     }
 }
 
-enum MessageDeliveryStatus: Hashable {
+enum MessageDeliveryStatus: Hashable, Codable {
     case sending
     case unread
     case read

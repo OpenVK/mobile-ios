@@ -27,6 +27,22 @@ final class MessagesService: MessagesServiceProtocol {
         self.client = client
     }
 
+    func cachedHistory(peerID: Int, offset: Int, count: Int) -> MessagesPage? {
+        guard let data = CacheService.shared.cachedData(for: historyCacheKey(peerID: peerID, offset: offset, count: count)),
+              let cachedPage = try? JSONDecoder().decode(CachedMessagesPage.self, from: data) else {
+            return nil
+        }
+        return MessagesPage(count: cachedPage.count, messages: cachedPage.messages)
+    }
+
+    func cachedStickerPacks() -> [VKStickerPack]? {
+        guard let data = CacheService.shared.cachedData(for: "messages.sticker-packs"),
+              let packs = try? JSONDecoder().decode([VKStickerPack].self, from: data) else {
+            return nil
+        }
+        return packs
+    }
+
     func fetchHistory(peerID: Int, offset: Int = 0, count: Int = 40, completion: @escaping (Result<MessagesPage, Error>) -> Void) {
         client.call(
             method: "messages.getHistory",
@@ -38,7 +54,9 @@ final class MessagesService: MessagesServiceProtocol {
             case .success(let response):
                 let profiles = response.profiles ?? []
                 let messages = (response.items ?? []).map { ChatMessage(message: $0, profiles: profiles) }.reversed()
-                completion(.success(MessagesPage(count: response.count ?? messages.count, messages: Array(messages))))
+                let page = MessagesPage(count: response.count ?? messages.count, messages: Array(messages))
+                self.cache(page: page, peerID: peerID, offset: offset, count: count)
+                completion(.success(page))
             case .failure(let error): completion(.failure(error))
             }
         }
@@ -71,8 +89,26 @@ final class MessagesService: MessagesServiceProtocol {
             httpMethod: "GET",
             as: VKStickerPacksResponse.self
         ) { result in
-            completion(result.map { $0.items ?? [] }.mapError { $0 as Error })
+            let packs = result.map { $0.items ?? [] }.mapError { $0 as Error }
+            if case .success(let value) = packs {
+                self.cacheStickerPacks(value)
+            }
+            completion(packs)
         }
+    }
+
+    private func cache(page: MessagesPage, peerID: Int, offset: Int, count: Int) {
+        guard let data = try? JSONEncoder().encode(CachedMessagesPage(count: page.count, messages: page.messages)) else { return }
+        CacheService.shared.cachePermanently(data: data, for: historyCacheKey(peerID: peerID, offset: offset, count: count))
+    }
+
+    private func cacheStickerPacks(_ packs: [VKStickerPack]) {
+        guard let data = try? JSONEncoder().encode(packs) else { return }
+        CacheService.shared.cachePermanently(data: data, for: "messages.sticker-packs")
+    }
+
+    private func historyCacheKey(peerID: Int, offset: Int, count: Int) -> String {
+        "messages.history.\(peerID).\(offset).\(count)"
     }
 
     func setTyping(peerID: Int) {
@@ -282,4 +318,9 @@ final class MessagesService: MessagesServiceProtocol {
         guard let name, !name.isEmpty else { return nil }
         return name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
     }
+}
+
+private struct CachedMessagesPage: Codable {
+    let count: Int
+    let messages: [ChatMessage]
 }
