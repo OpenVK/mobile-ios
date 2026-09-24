@@ -204,6 +204,10 @@ final class ChatViewModel: ObservableObject {
         isNearBottom = value
     }
 
+    func scrollToBottom(animated: Bool = false) {
+        requestScroll(.bottom(animated: animated))
+    }
+
     var peerPresenceText: String? {
         guard !conversation.isChat, !conversation.isGroup else { return nil }
         if isPeerOnline {

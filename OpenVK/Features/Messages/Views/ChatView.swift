@@ -25,8 +25,8 @@ struct ChatView: View {
 
     var body: some View {
         GeometryReader { geometry in
-                messageHistory(viewportHeight: geometry.size.height)
-                .overlay(alignment: .bottom) {
+                messageHistory(viewportHeight: max(0, geometry.size.height - composerHeight))
+                .safeAreaInset(edge: .bottom, spacing: 0) {
                     if #available(iOS 26.0, *) {
                         if viewModel.canSendMessages {
                             messageComposer(maxHeight: geometry.size.height / 2)
@@ -140,7 +140,7 @@ struct ChatView: View {
                     }
                     if viewModel.isLoading && viewModel.messages.isEmpty { ProgressView().padding(.top, 30) }
                     Color.clear
-                        .frame(height: composerContentInset)
+                        .frame(height: 1)
                         .id("chat-bottom")
                 }
                 .padding(.horizontal, 12)
@@ -200,14 +200,6 @@ struct ChatView: View {
         }
     }
 
-    private var composerContentInset: CGFloat {
-        if #available(iOS 26.0, *) {
-            composerHeight + 16
-        } else {
-            1
-        }
-    }
-
     private func shouldShowSenderDetails(for index: Int) -> Bool {
         !joinsMessage(at: index, with: index - 1)
     }
@@ -243,7 +235,13 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.15), value: isEmojiPanelPresented)
         .onChange(of: isEmojiPanelPresented) { isPresented in
-            if isPresented { viewModel.loadStickerPacks() }
+            guard isPresented else { return }
+            viewModel.loadStickerPacks()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 180_000_000)
+                guard isEmojiPanelPresented else { return }
+                viewModel.scrollToBottom()
+            }
         }
     }
 
