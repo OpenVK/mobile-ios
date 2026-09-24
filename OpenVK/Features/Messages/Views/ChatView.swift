@@ -25,7 +25,7 @@ struct ChatView: View {
 
     var body: some View {
         GeometryReader { geometry in
-                messageHistory
+                messageHistory(viewportHeight: geometry.size.height)
                 .overlay(alignment: .bottom) {
                     if #available(iOS 26.0, *) {
                         if viewModel.canSendMessages {
@@ -112,7 +112,7 @@ struct ChatView: View {
         return "участников"
     }
 
-    private var messageHistory: some View {
+    private func messageHistory(viewportHeight: CGFloat) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -129,6 +129,14 @@ struct ChatView: View {
                         }
                             .id(message.id)
                             .onAppear { viewModel.loadOlderIfNeeded(message: message) }
+                            .background(
+                                GeometryReader { messageGeometry in
+                                    Color.clear.preference(
+                                        key: ChatMessageFramePreferenceKey.self,
+                                        value: [message.id: messageGeometry.frame(in: .named("chat-history"))]
+                                    )
+                                }
+                            )
                     }
                     if viewModel.isLoading && viewModel.messages.isEmpty { ProgressView().padding(.top, 30) }
                     Color.clear
@@ -138,6 +146,7 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
+            .coordinateSpace(name: "chat-history")
             .overlay(alignment: .bottom) {
                 if conversation.isChat, let typing = viewModel.typingText {
                     Text(typing + "…")
@@ -149,11 +158,37 @@ struct ChatView: View {
                         .padding(.bottom, 8)
                 }
             }
-            .onChange(of: viewModel.messages.count) { count in
-                guard count > 0 else { return }
+            .onPreferenceChange(ChatMessageFramePreferenceKey.self) { frames in
+                let visibleMessage = frames
+                    .filter { $0.value.maxY > 0 && $0.value.minY < viewportHeight }
+                    .min { $0.value.minY < $1.value.minY }
+                if let messageID = visibleMessage?.key {
+                    viewModel.rememberPosition(messageID: messageID)
+                }
+            }
+            .onChange(of: viewModel.scrollRequestID) { _ in
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    withAnimation { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+                    await Task.yield()
+                    await Task.yield()
+                    switch viewModel.scrollRequest {
+                    case .initial(let savedMessageID):
+                        if let savedMessageID,
+                           viewModel.messages.contains(where: { $0.id == savedMessageID }) {
+                            proxy.scrollTo(savedMessageID, anchor: .top)
+                        } else {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                        }
+                    case .preservePosition(let messageID):
+                        proxy.scrollTo(messageID, anchor: .top)
+                    case .bottom(let animated):
+                        if animated {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("chat-bottom", anchor: .bottom)
+                            }
+                        } else {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                        }
+                    }
                 }
             }
         }
@@ -301,6 +336,14 @@ struct ChatView: View {
 
 }
 
+private struct ChatMessageFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [Int: CGRect] = [:]
+
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, newest in newest })
+    }
+}
+
 @available(iOS 26.0, *)
 private struct StickerPickerPanel: View {
     let packs: [VKStickerPack]
@@ -430,7 +473,12 @@ private struct MessageBubble: View {
                     if message.isOutgoing { Spacer(minLength: 48) }
                     if !message.isOutgoing && isChat && !isStickerMessage {
                         if showsSenderDetails {
-                            Avatar(user: sender, size: 26)
+                            NavigationLink {
+                                ProfileView(user: sender)
+                            } label: {
+                                Avatar(user: sender, size: 26)
+                            }
+                            .buttonStyle(.plain)
                         } else {
                             Color.clear.frame(width: 26, height: 26)
                         }
@@ -496,9 +544,14 @@ private struct MessageBubble: View {
     private var bubble: some View {
         VStack(alignment: .leading, spacing: 3) {
             if isChat, !message.isOutgoing, showsSenderDetails, let senderName = message.senderName {
-                Text(senderName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.appAccent)
+                NavigationLink {
+                    ProfileView(user: sender)
+                } label: {
+                    Text(senderName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.appAccent)
+                }
+                .buttonStyle(.plain)
             }
 
             messageTextAndMetadata
@@ -618,7 +671,9 @@ private struct MessageBubble: View {
     private var sender: User {
         User(
             uid: message.senderID,
-            username: "",
+            username: message.senderID < 0
+                ? "club\(abs(message.senderID))"
+                : "id\(message.senderID)",
             displayName: message.senderName ?? "",
             avatarURL: message.senderAvatarURL,
             isGroup: false

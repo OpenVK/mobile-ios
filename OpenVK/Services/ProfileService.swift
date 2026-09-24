@@ -29,6 +29,14 @@ final class ProfileService: ProfileServiceProtocol {
     private init() {}
 
     func fetchProfile(username: String, completion: @escaping (Result<User, Error>) -> Void) {
+        if username.hasPrefix("id"), let userID = Int(username.dropFirst(2)) {
+            fetchUserInfo(userID: userID, username: username, completion: completion)
+            return
+        }
+        if username.hasPrefix("club"), let groupID = Int(username.dropFirst(4)) {
+            fetchGroupInfo(groupID: groupID, username: username, completion: completion)
+            return
+        }
         APIClient.shared.call(
             method: "utils.resolveScreenName",
             parameters: ["screen_name": username],

@@ -1,6 +1,17 @@
 import Foundation
 import SwiftUI
 
+enum ChatScrollRequest: Equatable {
+    case initial(messageID: Int?)
+    case preservePosition(messageID: Int)
+    case bottom(animated: Bool)
+}
+
+private struct SavedChatPosition: Codable {
+    let messageID: Int
+    let historyOffset: Int
+}
+
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published private(set) var messages: [ChatMessage] = []
@@ -13,6 +24,8 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var isPeerOnline: Bool
     @Published private(set) var peerLastSeen: Date?
     @Published private(set) var canSendMessages: Bool
+    @Published private(set) var scrollRequest: ChatScrollRequest = .initial(messageID: nil)
+    @Published private(set) var scrollRequestID = 0
 
     let conversation: Conversation
     private let service: MessagesService
@@ -25,6 +38,14 @@ final class ChatViewModel: ObservableObject {
     private var typingExpirations: [Int: Date] = [:]
     private var typingNames: [Int: String] = [:]
     private var didLoadMessages = false
+    private var lastRememberedMessageID: Int?
+    private var newestHistoryOffset = 0
+
+    private var positionStorageKey: String {
+        let host = AppConfig.currentHost
+        let userID = AuthService.shared.currentUser?.uid ?? 0
+        return "openvk.chat.position.\(host).\(userID).\(conversation.id)"
+    }
 
     init(conversation: Conversation, service: MessagesService = .shared) {
         self.conversation = conversation
@@ -42,15 +63,20 @@ final class ChatViewModel: ObservableObject {
         guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
-        service.fetchHistory(peerID: conversation.id, offset: 0, count: pageSize) { [weak self] result in
+        let savedPosition = didLoadMessages ? nil : self.savedPosition()
+        let initialOffset = max(0, (savedPosition?.historyOffset ?? 0) - pageSize / 2)
+        service.fetchHistory(peerID: conversation.id, offset: initialOffset, count: pageSize) { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let page):
+                let isInitialLoad = !self.didLoadMessages
                 let existingIDs = Set(self.messages.map(\.id))
                 let newIncomingMessageArrived = self.didLoadMessages && page.messages.contains {
                     !existingIDs.contains($0.id) && !$0.isOutgoing
                 }
-                self.messages = self.mergingTransientMessages(into: page.messages)
+                self.messages = isInitialLoad
+                    ? self.mergingTransientMessages(into: page.messages)
+                    : self.mergingLoadedMessages(page.messages)
                 self.didLoadMessages = true
                 if newIncomingMessageArrived {
                     HapticManager.playMessageSound()
@@ -58,10 +84,15 @@ final class ChatViewModel: ObservableObject {
                 if page.messages.contains(where: { $0.endsChatParticipation }) {
                     self.canSendMessages = false
                 }
-                self.offset = page.messages.count
                 self.totalCount = page.count
                 self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
                 self.service.markAsRead(peerID: self.conversation.id)
+                if isInitialLoad {
+                    self.newestHistoryOffset = initialOffset
+                    self.offset = initialOffset + page.messages.count
+                    self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
+                    self.requestScroll(.initial(messageID: savedPosition?.messageID))
+                }
             case .failure(let error): self.errorMessage = error.localizedDescription
             }
             self.isLoading = false
@@ -71,14 +102,16 @@ final class ChatViewModel: ObservableObject {
     func loadOlderIfNeeded(message: ChatMessage) {
         guard message.id == messages.first?.id, hasMore, !isLoadingOlder else { return }
         isLoadingOlder = true
-        service.fetchHistory(peerID: conversation.id, offset: offset, count: pageSize) { [weak self] result in
+        let requestedOffset = offset
+        service.fetchHistory(peerID: conversation.id, offset: requestedOffset, count: pageSize) { [weak self] result in
             guard let self else { return }
             if case .success(let page) = result {
                 let existing = Set(self.messages.map(\.id))
                 self.messages.insert(contentsOf: page.messages.filter { !existing.contains($0.id) }, at: 0)
-                self.offset = self.messages.count
+                self.offset = requestedOffset + page.messages.count
                 self.totalCount = page.count
                 self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
+                self.requestScroll(.preservePosition(messageID: message.id))
             }
             self.isLoadingOlder = false
         }
@@ -90,6 +123,7 @@ final class ChatViewModel: ObservableObject {
         guard !value.isEmpty else { return }
         let pendingMessage = ChatMessage.pending(text: value)
         messages.append(pendingMessage)
+        requestScroll(.bottom(animated: true))
 
         service.sendMessage(peerID: conversation.id, text: value) { [weak self] result in
             guard let self else { return }
@@ -123,6 +157,7 @@ final class ChatViewModel: ObservableObject {
         guard let stickerID = sticker.identifier else { return }
         let pendingMessage = ChatMessage.pending(sticker: sticker)
         messages.append(pendingMessage)
+        requestScroll(.bottom(animated: true))
 
         service.sendSticker(peerID: conversation.id, stickerID: stickerID) { [weak self] result in
             guard let self, let index = self.messages.firstIndex(where: { $0.id == pendingMessage.id }) else { return }
@@ -138,6 +173,17 @@ final class ChatViewModel: ObservableObject {
         guard Date().timeIntervalSince(lastTypingSentAt) >= 3 else { return }
         lastTypingSentAt = Date()
         service.setTyping(peerID: conversation.id)
+    }
+
+    func rememberPosition(messageID: Int) {
+        guard messageID > 0, messageID != lastRememberedMessageID else { return }
+        guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+        lastRememberedMessageID = messageID
+        let historyOffset = newestHistoryOffset + messages.count - index - 1
+        let position = SavedChatPosition(messageID: messageID, historyOffset: historyOffset)
+        if let data = try? JSONEncoder().encode(position) {
+            UserDefaults.standard.set(data, forKey: positionStorageKey)
+        }
     }
 
     var peerPresenceText: String? {
@@ -279,5 +325,36 @@ final class ChatViewModel: ObservableObject {
         }
         return (loadedMessages + transientMessages)
             .sorted { $0.date < $1.date }
+    }
+
+    private func mergingLoadedMessages(_ loadedMessages: [ChatMessage]) -> [ChatMessage] {
+        var messagesByID: [Int: ChatMessage] = [:]
+        for message in messages where message.deliveryStatus != .sending && message.deliveryStatus != .failed {
+            messagesByID[message.id] = message
+        }
+        for message in loadedMessages {
+            messagesByID[message.id] = message
+        }
+        let transientMessages = messages.filter {
+            $0.deliveryStatus == .sending || $0.deliveryStatus == .failed
+        }
+        return (Array(messagesByID.values) + transientMessages)
+            .sorted { $0.date < $1.date }
+    }
+
+    private func requestScroll(_ request: ChatScrollRequest) {
+        scrollRequest = request
+        scrollRequestID &+= 1
+    }
+
+    private func savedPosition() -> SavedChatPosition? {
+        if let data = UserDefaults.standard.data(forKey: positionStorageKey),
+           let position = try? JSONDecoder().decode(SavedChatPosition.self, from: data) {
+            return position
+        }
+        if let messageID = UserDefaults.standard.object(forKey: positionStorageKey) as? Int {
+            return SavedChatPosition(messageID: messageID, historyOffset: 0)
+        }
+        return nil
     }
 }
