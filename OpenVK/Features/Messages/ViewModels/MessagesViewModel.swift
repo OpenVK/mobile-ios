@@ -7,223 +7,264 @@ import Foundation
 import SwiftUI
 
 final class MessagesViewModel: ObservableObject {
-
     @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var isLoading = false
     @Published private(set) var isLoadingMore = false
-    private(set) var hasMore = true
+    @Published private(set) var typingUsersByConversation: [Int: [String]] = [:]
+    @Published var errorMessage: String?
 
     private let service: MessagesServiceProtocol
-    private let pageSize = 20
+    private let pageSize = 30
     private var currentOffset = 0
+    private var totalCount = 0
+    private var hasMore = true
+    private var typingExpirations: [Int: [Int: Date]] = [:]
+    private var typingNames: [Int: [Int: String]] = [:]
 
     init(service: MessagesServiceProtocol = MessagesService.shared) {
         self.service = service
     }
 
     func load() {
+        guard !isLoading else { return }
+
         isLoading = true
+        errorMessage = nil
         currentOffset = 0
+        totalCount = 0
         hasMore = true
 
         service.fetchConversations(offset: 0, count: pageSize) { [weak self] result in
             DispatchQueue.main.async {
-                self?.isLoading = false
-                if case .success(let items) = result {
-                    self?.conversations = items
-                    self?.currentOffset = items.count
-                    self?.hasMore = items.count >= (self?.pageSize ?? 20)
+                guard let self else { return }
+                self.isLoading = false
+
+                switch result {
+                case .success(let page):
+                    self.conversations = page.conversations
+                    self.totalCount = page.totalCount
+                    self.currentOffset = page.conversations.count
+                    self.hasMore = self.currentOffset < self.totalCount &&
+                        !page.conversations.isEmpty
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
                 }
             }
         }
     }
 
-    func loadMore() {
-        guard !isLoadingMore, hasMore else { return }
+    func loadMoreIfNeeded(after conversation: Conversation) {
+        guard conversation.id == conversations.last?.id else { return }
+        loadMore()
+    }
+
+    func handleLongPollEvent(_ notification: Notification) {
+        guard let type = notification.userInfo?["type"] as? Int,
+              (61...64).contains(type) else {
+            return
+        }
+
+        let userIDs: [Int]
+        if let ids = notification.userInfo?["userIDs"] as? [Int] {
+            userIDs = ids
+        } else if let userID = notification.userInfo?["userID"] as? Int {
+            userIDs = [userID]
+        } else {
+            return
+        }
+        let peerID = notification.userInfo?["peerID"] as? Int
+        guard let conversation = conversations.first(where: {
+            if let peerID { return $0.id == peerID }
+            return !$0.isChat && $0.peer.uid == userIDs.first
+        }) else { return }
+
+        let expiration = Date().addingTimeInterval(4)
+        var users = typingExpirations[conversation.id] ?? [:]
+        for userID in userIDs { users[userID] = expiration }
+        typingExpirations[conversation.id] = users
+        typingUsersByConversation[conversation.id] = displayNames(for: users.keys, conversation: conversation)
+
+        if conversation.isChat {
+            resolveTypingNames(userIDs: userIDs, conversation: conversation)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self else { return }
+            for userID in userIDs {
+                guard self.typingExpirations[conversation.id]?[userID] == expiration else { continue }
+                self.typingExpirations[conversation.id]?.removeValue(forKey: userID)
+            }
+            if self.typingExpirations[conversation.id]?.isEmpty == true {
+                self.typingExpirations.removeValue(forKey: conversation.id)
+                self.typingNames.removeValue(forKey: conversation.id)
+                self.typingUsersByConversation.removeValue(forKey: conversation.id)
+            }
+        }
+    }
+
+    private func displayNames<S: Sequence>(for userIDs: S, conversation: Conversation) -> [String] where S.Element == Int {
+        userIDs.map { userID in
+            if let name = typingNames[conversation.id]?[userID] { return name }
+            if !conversation.isChat, userID == conversation.peer.uid {
+                return firstNameOnly(conversation.peer.displayName)
+            }
+            return "Пользователь \(userID)"
+        }
+    }
+
+    private func resolveTypingNames(userIDs: [Int], conversation: Conversation) {
+        let ids = Array(Set(userIDs)).filter { $0 > 0 }
+        guard !ids.isEmpty else { return }
+        APIClient.shared.call(
+            method: "users.get",
+            parameters: [
+                "user_ids": ids.map(String.init).joined(separator: ","),
+                "fields": "first_name,last_name,screen_name"
+            ],
+            httpMethod: "GET",
+            as: [VKUserProfile].self
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard case .success(let profiles) = result else { return }
+                var names = self.typingNames[conversation.id] ?? [:]
+                for profile in profiles {
+                    let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    names[profile.id] = name.isEmpty
+                        ? self.firstNameOnly(profile.screenName ?? "Пользователь \(profile.id)")
+                        : self.firstNameOnly(name)
+                }
+                self.typingNames[conversation.id] = names
+                if let activeUsers = self.typingExpirations[conversation.id]?.keys {
+                    self.typingUsersByConversation[conversation.id] = self.displayNames(for: activeUsers, conversation: conversation)
+                }
+            }
+        }
+    }
+
+    private func firstNameOnly(_ name: String) -> String {
+        name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? name
+    }
+
+    func typingText(for conversation: Conversation) -> String? {
+        guard let names = typingUsersByConversation[conversation.id], !names.isEmpty else { return nil }
+        if names.count == 1 { return "\(names[0]) печатает" }
+        if names.count == 2 { return "\(names[0]) и \(names[1]) печатают" }
+        let count = names.count
+        let lastTwoDigits = count % 100
+        let lastDigit = count % 10
+        let noun = (11...14).contains(lastTwoDigits)
+            ? "человек"
+            : (2...4).contains(lastDigit) ? "человека" : "человек"
+        return "\(count) \(noun) печатают"
+    }
+
+    func markConversationAsRead(_ conversation: Conversation) {
+        service.markConversationAsRead(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.conversations = self.conversations.map { item in
+                        guard item.id == conversation.id else { return item }
+                        return Conversation(
+                            id: item.id,
+                            peer: item.peer,
+                            lastMessage: item.lastMessage,
+                            lastMessageAuthorName: item.lastMessageAuthorName,
+                            lastMessageOutgoing: item.lastMessageOutgoing,
+                            updatedAt: item.updatedAt,
+                            unreadCount: 0,
+                            lastMessageId: item.lastMessageId,
+                            lastMessageReadState: item.lastMessageReadState,
+                            isChat: item.isChat,
+                            isChatMember: item.isChatMember,
+                            chatMemberCount: item.chatMemberCount
+                        )
+                    }
+                    AuthService.shared.fetchCounters()
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func deleteConversation(_ conversation: Conversation) {
+        service.deleteConversation(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.conversations.removeAll { $0.id == conversation.id }
+                    self.totalCount = max(0, self.totalCount - 1)
+                    AuthService.shared.fetchCounters()
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func leaveChat(_ conversation: Conversation, deleteChat: Bool) {
+        service.leaveChat(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    if deleteChat {
+                        self.service.deleteConversation(peerID: conversation.id) { [weak self] deleteResult in
+                            DispatchQueue.main.async {
+                                guard let self else { return }
+                                self.removeConversationLocally(conversation)
+                                if case .failure(let error) = deleteResult {
+                                    self.errorMessage = error.localizedDescription
+                                }
+                                AuthService.shared.fetchCounters()
+                            }
+                        }
+                    } else {
+                        self.removeConversationLocally(conversation)
+                        AuthService.shared.fetchCounters()
+                    }
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func removeConversationLocally(_ conversation: Conversation) {
+        let oldCount = conversations.count
+        conversations.removeAll { $0.id == conversation.id }
+        if conversations.count != oldCount {
+            totalCount = max(0, totalCount - 1)
+        }
+    }
+
+    private func loadMore() {
+        guard !isLoading, !isLoadingMore, hasMore else { return }
 
         isLoadingMore = true
         service.fetchConversations(offset: currentOffset, count: pageSize) { [weak self] result in
             DispatchQueue.main.async {
-                self?.isLoadingMore = false
-                if case .success(let items) = result {
-                    self?.conversations.append(contentsOf: items)
-                    self?.currentOffset += items.count
-                    self?.hasMore = items.count >= (self?.pageSize ?? 20)
-                }
-            }
-        }
-    }
-}
+                guard let self else { return }
+                self.isLoadingMore = false
 
-final class ChatViewModel: ObservableObject {
-
-    @Published var messages: [Message] = []
-    @Published var isLoading = false
-    @Published var isLoadingMore = false
-    @Published var draft = ""
-    @Published var shouldScrollToBottom = false
-    @Published var scrollToMessageId: Int?
-    @Published var selectedMessageIds: Set<Int> = []
-    @Published var editingMessageId: Int?
-    @Published var editingText = ""
-    private(set) var hasMore = true
-
-    var isSelecting: Bool { !selectedMessageIds.isEmpty }
-
-    let peerID: Int
-    let peerName: String
-
-    private let service: MessagesServiceProtocol
-    private let pageSize = 20
-    private var currentOffset = 0
-
-    init(peerID: Int, peerName: String, service: MessagesServiceProtocol = MessagesService.shared) {
-        self.peerID = peerID
-        self.peerName = peerName
-        self.service = service
-    }
-
-    func load() {
-        isLoading = true
-        currentOffset = 0
-        hasMore = true
-
-        service.fetchMessages(peerID: peerID, offset: 0, count: pageSize) { [weak self] result in
-            DispatchQueue.main.async {
-                self?.isLoading = false
-                if case .success(let msgs) = result {
-                    self?.messages = msgs
-                    self?.currentOffset = msgs.count
-                    self?.hasMore = msgs.count >= (self?.pageSize ?? 20)
-                }
-            }
-        }
-    }
-
-    func loadMore() {
-        guard !isLoadingMore, hasMore else { return }
-
-        isLoadingMore = true
-        service.fetchMessages(peerID: peerID, offset: currentOffset, count: pageSize) { [weak self] result in
-            DispatchQueue.main.async {
-                self?.isLoadingMore = false
-                if case .success(let msgs) = result {
-                    self?.messages.append(contentsOf: msgs)
-                    self?.currentOffset += msgs.count
-                    self?.hasMore = msgs.count >= (self?.pageSize ?? 20)
-                }
-            }
-        }
-    }
-
-    func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-
-        draft = ""
-
-        let tempMsg = Message(
-            id: Int(Date().timeIntervalSince1970 * -1000),
-            peerId: peerID,
-            fromId: AuthService.shared.currentUser?.uid ?? 0,
-            text: text,
-            date: Date(),
-            direction: .outgoing
-        )
-        messages.insert(tempMsg, at: 0)
-
-        service.send(text: text, to: peerID) { [weak self] result in
-            DispatchQueue.main.async {
                 switch result {
-                case .success(let messageId):
-                    if let idx = self?.messages.firstIndex(where: { $0.id == tempMsg.id }) {
-                        self?.messages[idx] = Message(
-                            id: messageId,
-                            peerId: self?.messages[idx].peerId ?? 0,
-                            fromId: self?.messages[idx].fromId ?? 0,
-                            text: text,
-                            date: Date(),
-                            direction: .outgoing
-                        )
-                    }
-                case .failure:
-                    self?.messages.removeAll { $0.id == tempMsg.id }
+                case .success(let page):
+                    let knownIDs = Set(self.conversations.map(\.id))
+                    self.conversations.append(contentsOf: page.conversations.filter {
+                        !knownIDs.contains($0.id)
+                    })
+                    self.totalCount = page.totalCount
+                    self.currentOffset = self.conversations.count
+                    self.hasMore = self.currentOffset < self.totalCount &&
+                        !page.conversations.isEmpty
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
                 }
-            }
-        }
-    }
-
-    func deleteMessage(_ id: Int) {
-        service.delete(messageIDs: [id]) { [weak self] result in
-            DispatchQueue.main.async {
-                if case .success = result {
-                    self?.messages.removeAll { $0.id == id }
-                    self?.selectedMessageIds.remove(id)
-                }
-            }
-        }
-    }
-
-    func toggleSelection(_ id: Int) {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-            if selectedMessageIds.contains(id) {
-                selectedMessageIds.remove(id)
-            } else {
-                selectedMessageIds.insert(id)
-            }
-        }
-    }
-
-    func clearSelection() {
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-            selectedMessageIds.removeAll()
-        }
-    }
-
-    func deleteSelected() {
-        let ids = Array(selectedMessageIds)
-        service.delete(messageIDs: ids) { [weak self] result in
-            DispatchQueue.main.async {
-                if case .success = result {
-                    self?.messages.removeAll { self?.selectedMessageIds.contains($0.id) ?? false }
-                    self?.clearSelection()
-                }
-            }
-        }
-    }
-
-    func startEditing(_ message: Message) {
-        editingMessageId = message.id
-        editingText = message.text
-        draft = message.text
-    }
-
-    func cancelEditing() {
-        editingMessageId = nil
-        editingText = ""
-        draft = ""
-    }
-
-    func saveEdit() {
-        guard let msgId = editingMessageId else { return }
-        let newText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newText.isEmpty else { return }
-
-        service.edit(messageID: msgId, newText: newText) { [weak self] result in
-            DispatchQueue.main.async {
-                if case .success = result {
-                    if let idx = self?.messages.firstIndex(where: { $0.id == msgId }) {
-                        self?.messages[idx] = Message(
-                            id: msgId,
-                            peerId: self?.messages[idx].peerId ?? 0,
-                            fromId: self?.messages[idx].fromId ?? 0,
-                            text: newText,
-                            date: self?.messages[idx].date ?? Date(),
-                            direction: .outgoing
-                        )
-                    }
-                }
-                self?.cancelEditing()
             }
         }
     }

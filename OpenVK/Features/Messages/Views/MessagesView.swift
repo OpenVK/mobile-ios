@@ -6,314 +6,234 @@
 import SwiftUI
 
 struct MessagesView: View {
-
     @StateObject private var viewModel = MessagesViewModel()
-    @State private var showNewChat = false
+    @State private var showCreateChat = false
+    @State private var isViewingChat = false
+    @State private var conversationToDelete: Conversation?
+    @State private var conversationToLeave: Conversation?
+    @Binding var selectedMedia: Attachment?
+    @Binding var owningPost: Post?
+
+    init(
+        selectedMedia: Binding<Attachment?> = .constant(nil),
+        owningPost: Binding<Post?> = .constant(nil)
+    ) {
+        _selectedMedia = selectedMedia
+        _owningPost = owningPost
+    }
 
     var body: some View {
         NavigationView {
-            listWithNav
-                .navigationBarTitle(L10n.Messages.title)
+            content
+                .navigationTitle("Сообщения")
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(action: { showNewChat = true }) {
+                        Button {
+                            showCreateChat = true
+                        } label: {
                             Image(systemName: "plus")
-                                .font(.system(size: 17))
-                                .foregroundColor(.appAccent)
+                                .font(.system(size: 16, weight: .semibold))
                         }
+                        .accessibilityLabel("Написать сообщение")
                     }
                 }
+                .sheet(isPresented: $showCreateChat) {
+                    CreateChatView()
+                }
+                .confirmationDialog(
+                    "Выйти из беседы?",
+                    isPresented: Binding(
+                        get: { conversationToLeave != nil },
+                        set: { if !$0 { conversationToLeave = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    if let conversation = conversationToLeave {
+                        Button("Выйти") {
+                            viewModel.leaveChat(conversation, deleteChat: false)
+                            conversationToLeave = nil
+                        }
+                        Button("Выйти и удалить чат", role: .destructive) {
+                            viewModel.leaveChat(conversation, deleteChat: true)
+                            conversationToLeave = nil
+                        }
+                    }
+                    Button("Отмена", role: .cancel) {
+                        conversationToLeave = nil
+                    }
+                } message: {
+                    if let conversation = conversationToLeave {
+                        Text("Вы покинете «\(conversation.peer.displayName)».")
+                    }
+                }
+                .confirmationDialog(
+                    "Удалить чат?",
+                    isPresented: Binding(
+                        get: { conversationToDelete != nil },
+                        set: { if !$0 { conversationToDelete = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("Удалить", role: .destructive) {
+                        if let conversation = conversationToDelete {
+                            viewModel.deleteConversation(conversation)
+                        }
+                        conversationToDelete = nil
+                    }
+                    Button("Отмена", role: .cancel) {
+                        conversationToDelete = nil
+                    }
+                } message: {
+                    Text("Чат будет удалён из списка сообщений.")
+                }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
-        .fullScreenCover(isPresented: $showNewChat) {
-            NewChatView()
-                .accentColor(Color.appAccent)
-                .tint(Color.appAccent)
-        }
+        .chatTabBarVisibility(isHidden: isViewingChat)
         .onAppear {
             if viewModel.conversations.isEmpty {
                 viewModel.load()
             }
         }
-    }
-
-    private var emptyState: some View {
-        VStack {
-            Spacer()
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 44))
-                .foregroundColor(Color(.tertiaryLabel))
-            Text(L10n.Messages.empty)
-                .font(.system(size: 15))
-                .foregroundColor(.secondary)
-                .padding(.top, 10)
-            Spacer()
-        }
-    }
-
-    private var listWithNav: some View {
-        Group {
-            if viewModel.isLoading && viewModel.conversations.isEmpty {
-                VStack {
-                    Spacer()
-                    LongLoadingIndicator(message: "Насколько сильно любите диалоги в опенвк? Я очень... :)", timeout: 5.0)
-                    Spacer()
-                }
-            } else if viewModel.conversations.isEmpty {
-                emptyState
-            } else {
-                list
-            }
-        }
-    }
-
-    private var list: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(viewModel.conversations) { convo in
-                    NavigationLink(destination: ChatView(conversation: convo)) {
-                        ConversationRow(conversation: convo)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    SectionSeparator()
-                }
-
-                if viewModel.hasMore {
-                    Button(action: { viewModel.loadMore() }) {
-                        HStack {
-                            Spacer()
-                            if viewModel.isLoadingMore {
-                                ProgressView()
-                            } else {
-                                Text("Загрузить ещё")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.appAccent)
-                            }
-                            Spacer()
-                        }
-                        .padding(.vertical, 16)
-                    }
-                }
-            }
-        }
         .refreshable {
-            AuthService.shared.fetchCounters()
             viewModel.load()
         }
-    }
-}
-
-struct NewChatView: View {
-    @Environment(\.presentationMode) var presentationMode
-    @State private var searchQuery = ""
-    @State private var friends: [User] = []
-    @State private var isLoading = false
-    @State private var offset = 0
-    @State private var hasMore = true
-    @State private var isLoadingMore = false
-    @State private var lastTriggeredID: UUID? = nil
-
-    var filteredFriends: [User] {
-        if searchQuery.isEmpty {
-            return friends
-        } else {
-            return friends.filter { $0.displayName.localizedCaseInsensitiveContains(searchQuery) || $0.username.localizedCaseInsensitiveContains(searchQuery) }
+        .onReceive(NotificationCenter.default.publisher(for: .openvkLongPollDidReceiveEvent)) { notification in
+            let type = notification.userInfo?["type"] as? Int ?? -1
+            if type == 4 {
+                viewModel.load()
+                AuthService.shared.fetchCounters()
+            } else if (61...64).contains(type) {
+                viewModel.handleLongPollEvent(notification)
+            } else if [0, 3, 5, 7, 13, 14, 51, 52].contains(type) {
+                viewModel.load()
+                AuthService.shared.fetchCounters()
+            } else if type == 80 {
+                AuthService.shared.fetchCounters()
+            }
+        }
+        .alert(
+            "Не удалось выполнить запрос",
+            isPresented: Binding(
+                get: { viewModel.errorMessage != nil },
+                set: { if !$0 { viewModel.errorMessage = nil } }
+            )
+        ) {
+            Button("ОК", role: .cancel) {}
+        } message: {
+            Text(viewModel.errorMessage ?? "Попробуйте ещё раз")
         }
     }
 
-    var body: some View {
-        NavigationView {
-            ZStack {
-                if isLoading {
-                    LongLoadingIndicator(message: "Насколько сильно любите диалоги в опенвк? Я очень... :)", timeout: 5.0)
-                } else {
-                    List {
-                        if !filteredFriends.isEmpty {
-                            Section(header: Text("Друзья")) {
-                                ForEach(filteredFriends) { user in
-                                    NavigationLink(destination: ChatView(conversation: Conversation(peer: user, lastMessage: ""))) {
-                                        HStack(spacing: 12) {
-                                            Avatar(user: user, size: 36)
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                HStack(spacing: 4) {
-                                                    Text(user.displayName)
-                                                        .font(.system(size: 15, weight: .medium))
-                                                        .foregroundColor(.primary)
-                                                    
-                                                    if user.isOfficial == true {
-                                                        Image(systemName: "checkmark.seal.fill")
-                                                            .font(.system(size: 14))
-                                                            .foregroundColor(.appAccent)
-                                                    }
-                                                    SupporterBadgeView(screenName: user.username)
-                                                }
-                                                Text("@\(user.username)")
-                                                    .font(.system(size: 12))
-                                                    .foregroundColor(.secondary)
-                                            }
-                                        }
-                                        .padding(.vertical, 2)
-                                        .onAppear {
-                                            if user.id == filteredFriends.last?.id {
-                                                loadMoreFriends()
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if isLoadingMore {
-                                    HStack {
-                                        Spacer()
-                                        ProgressView()
-                                        Spacer()
-                                    }
-                                    .padding(.vertical, 8)
-                                    .listRowBackground(Color.clear)
-                                }
+    @ViewBuilder
+    private var content: some View {
+        if viewModel.isLoading && viewModel.conversations.isEmpty {
+            ProgressView("Загрузка чатов…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if viewModel.conversations.isEmpty {
+            VStack(spacing: 12) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 42))
+                    .foregroundColor(.secondary)
+                Text("Нет чатов")
+                    .font(.system(size: 17, weight: .semibold))
+                Text("Здесь появятся ваши личные сообщения")
+                    .font(.system(size: 15))
+                    .foregroundColor(.secondary)
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List {
+                ForEach(viewModel.conversations) { conversation in
+                    NavigationLink {
+                        ChatView(
+                            conversation: conversation,
+                            selectedMedia: $selectedMedia,
+                            owningPost: $owningPost
+                        )
+                            .onAppear { isViewingChat = true }
+                            .onDisappear { isViewingChat = false }
+                    } label: {
+                        ConversationRow(
+                            conversation: conversation,
+                            typingText: viewModel.typingText(for: conversation)
+                        )
+                    }
+                    .contextMenu {
+                        if conversation.unreadCount > 0 {
+                            Button {
+                                viewModel.markConversationAsRead(conversation)
+                            } label: {
+                                Label("Пометить как прочитанное", systemImage: "envelope.open")
                             }
                         }
 
-                        if filteredFriends.isEmpty && !isLoading {
-                            VStack(spacing: 8) {
-                                Spacer()
-                                Image(systemName: "person.fill.badge.plus")
-                                    .font(.system(size: 40))
-                                    .foregroundColor(Color(.tertiaryLabel))
-                                Text("Ничего не найдено")
-                                    .font(.system(size: 15))
-                                    .foregroundColor(.secondary)
-                                Spacer()
+                        if conversation.isChat && conversation.isChatMember {
+                            Button(role: .destructive) {
+                                conversationToLeave = conversation
+                            } label: {
+                                Label {
+                                    Text("Выйти из беседы")
+                                } icon: {
+                                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                                        .symbolRenderingMode(.monochrome)
+                                        .foregroundStyle(.red)
+                                }
                             }
-                            .frame(maxWidth: .infinity, minHeight: 200, alignment: .center)
-                            .listRowBackground(Color.clear)
+                            .tint(.red)
+                        } else if conversation.isChat {
+                            Button(role: .destructive) {
+                                conversationToDelete = conversation
+                            } label: {
+                                Label {
+                                    Text("Удалить чат")
+                                } icon: {
+                                    Image(systemName: "trash")
+                                        .symbolRenderingMode(.monochrome)
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                            .tint(.red)
+                        } else {
+                            Button(role: .destructive) {
+                                conversationToDelete = conversation
+                            } label: {
+                                Label {
+                                    Text("Удалить чат")
+                                } icon: {
+                                    Image(systemName: "trash")
+                                        .symbolRenderingMode(.monochrome)
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                            .tint(.red)
                         }
                     }
-                    .listStyle(InsetGroupedListStyle())
+                    .contentShape(Rectangle())
+                    .onAppear {
+                        viewModel.loadMoreIfNeeded(after: conversation)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationBarTitle("Новый чат", displayMode: .inline)
-            .navigationBarItems(leading: Button("Закрыть") {
-                presentationMode.wrappedValue.dismiss()
-            })
-            .searchable(text: $searchQuery, placement: .navigationBarDrawer(displayMode: .always), prompt: "Поиск...")
-            .onAppear { loadFriends() }
-        }
-        .navigationViewStyle(StackNavigationViewStyle())
-    }
 
-    private func loadFriends() {
-        isLoading = true
-        offset = 0
-        hasMore = true
-        lastTriggeredID = nil
-        APIClient.shared.call(
-            method: "friends.get",
-            parameters: [
-                "fields": "photo_100,online,last_seen",
-                "count": "30",
-                "offset": "0"
-            ],
-            httpMethod: "GET",
-            as: VKSearchResponseInner<VKUserProfile>.self
-        ) { result in
-            isLoading = false
-            switch result {
-            case .success(let inner):
-                let mapped = (inner.items ?? []).map { vkUser -> User in
-                    let name = "\(vkUser.firstName ?? "") \(vkUser.lastName ?? "")".trimmingCharacters(in: .whitespacesAndNewlines)
-                    return User(
-                        uid: vkUser.id,
-                        username: vkUser.screenName ?? "id\(vkUser.id)",
-                        displayName: name.isEmpty ? "Пользователь" : name,
-                        avatarURL: (vkUser.photo100).flatMap { URL(string: $0) },
-                        isOnline: vkUser.online == 1,
-                        onlinePlatform: vkUser.lastSeen?.platformName
-                    )
+                if viewModel.isLoadingMore {
+                    HStack {
+                        Spacer()
+                        ProgressView()
+                        Spacer()
+                    }
+                    .listRowSeparator(.hidden)
                 }
-                friends = mapped
-                offset = 1
-                hasMore = mapped.count >= 30
-            case .failure:
-                break
             }
-        }
-    }
-
-    private func loadMoreFriends() {
-        guard !isLoading, !isLoadingMore, hasMore else { return }
-        
-        if let lastID = filteredFriends.last?.id {
-            if lastTriggeredID == lastID {
-                return
-            }
-            lastTriggeredID = lastID
-        }
-        
-        isLoadingMore = true
-        APIClient.shared.call(
-            method: "friends.get",
-            parameters: [
-                "fields": "photo_100,online,last_seen",
-                "count": "30",
-                "offset": "\(offset)"
-            ],
-            httpMethod: "GET",
-            as: VKSearchResponseInner<VKUserProfile>.self
-        ) { result in
-            isLoadingMore = false
-            switch result {
-            case .success(let inner):
-                let mapped = (inner.items ?? []).map { vkUser -> User in
-                    let name = "\(vkUser.firstName ?? "") \(vkUser.lastName ?? "")".trimmingCharacters(in: .whitespacesAndNewlines)
-                    return User(
-                        uid: vkUser.id,
-                        username: vkUser.screenName ?? "id\(vkUser.id)",
-                        displayName: name.isEmpty ? "Пользователь" : name,
-                        avatarURL: (vkUser.photo100).flatMap { URL(string: $0) },
-                        isOnline: vkUser.online == 1,
-                        onlinePlatform: vkUser.lastSeen?.platformName
-                    )
-                }
-                if mapped.isEmpty {
-                    hasMore = false
-                } else {
-                    friends.append(contentsOf: mapped)
-                    offset += 1
-                    hasMore = mapped.count >= 30
-                }
-            case .failure:
-                break
-            }
+            .listStyle(.plain)
         }
     }
 }
 
-struct LongLoadingIndicator: View {
-    var message: String = "Насколько сильно любите диалоги в опенвк? Я очень... :)"
-    var timeout: TimeInterval = 5.0
-
-    @State private var showMessage = false
-
-    var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .scaleEffect(1.2)
-
-            if showMessage {
-                Text(message)
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .transition(.opacity)
-            }
-        }
-        .onAppear {
-            showMessage = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
-                withAnimation {
-                    showMessage = true
-                }
-            }
+private extension View {
+    @ViewBuilder func chatTabBarVisibility(isHidden: Bool) -> some View {
+        if #available(iOS 16.0, *) {
+            self.toolbar(isHidden ? .hidden : .visible, for: .tabBar)
+        } else {
+            self
         }
     }
 }

@@ -389,7 +389,6 @@ struct NotificationsSettingsView: View {
     @State private var appSound = true
     @State private var appVibro = true
     @State private var appText = true
-    @AppStorage("badge_msg") private var badgeMsg = true
     @AppStorage("badge_notify") private var badgeNotify = true
     @AppStorage("badge_friend") private var badgeFriend = true
     @State private var showResetAlert = false
@@ -465,20 +464,6 @@ struct NotificationsSettingsView: View {
             }
 
             Section(header: Text("Счетчик на иконке")) {
-                Toggle(isOn: $badgeMsg) {
-                    HStack(spacing: 12) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(Color.appAccent)
-                                .frame(width: 28, height: 28)
-                            Image(systemName: "bubble.left.fill")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.white)
-                                .frame(width: 22, height: 22)
-                        }
-                        Text("Сообщения")
-                    }
-                }
                 Toggle(isOn: $badgeNotify) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -534,7 +519,6 @@ struct NotificationsSettingsView: View {
                     appSound = true
                     appVibro = true
                     appText = true
-                    badgeMsg = true
                     badgeNotify = true
                     badgeFriend = true
                 },
@@ -714,7 +698,7 @@ struct DataAndMemorySettingsView: View {
                 .disabled(cacheCleared)
             }
 
-            Section(footer: Text("Кэш хранит ответы API и изображения для ускорения работы приложения. Изображения хранятся до 10 минут, а API-ответы — до 24 часов для работы без сети.")) {
+            Section(footer: Text("Кэш хранит ответы API и изображения для ускорения работы приложения. История сообщений, вложения и стикеры хранятся на устройстве, пока вы не нажмёте «Очистить кэш». Кнопка выше удаляет всё это.")) {
                 EmptyView()
             }
         }
