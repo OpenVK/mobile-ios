@@ -386,9 +386,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func prefetchMedia(for messages: [ChatMessage]) {
-        let urls = messages.flatMap { message in
-            [message.senderAvatarURL, message.stickerURL] + message.photos.map(\.url)
-        }.compactMap { $0 }
+        let urls: [URL] = messages.flatMap { message -> [URL] in
+            [message.senderAvatarURL, message.stickerURL].compactMap { $0 }
+                + message.photos.map(\.url)
+                + message.videos.compactMap(\.thumbnailURL)
+        }
         ImageCache.shared.prefetchPermanently(urls)
     }
 

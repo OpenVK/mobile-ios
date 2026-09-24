@@ -8,6 +8,7 @@ struct ChatView: View {
     @State private var composerHeight: CGFloat = 40
     @State private var isEmojiPanelPresented = false
     @State private var recentStickers: [VKSticker] = []
+    @State private var selectedVideo: ChatVideo?
     @FocusState private var isComposerFocused: Bool
     @Binding var selectedMedia: Attachment?
     @Binding var owningPost: Post?
@@ -77,6 +78,9 @@ struct ChatView: View {
         .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
+        .fullScreenCover(item: $selectedVideo) { video in
+            ChatVideoPlayer(video: video)
+        }
     }
 
     private var chatTitle: some View {
@@ -126,6 +130,8 @@ struct ChatView: View {
                             joinsNext: joinsMessage(at: index, with: index + 1)
                         ) { photo in
                             openPhotoViewer(for: photo)
+                        } onVideoTap: { video in
+                            selectedVideo = video
                         }
                             .id(message.id)
                             .onAppear { viewModel.loadOlderIfNeeded(message: message) }
@@ -467,6 +473,7 @@ private struct MessageBubble: View {
     let joinsPrevious: Bool
     let joinsNext: Bool
     let onPhotoTap: (ChatPhoto) -> Void
+    let onVideoTap: (ChatVideo) -> Void
 
     var body: some View {
         Group {
@@ -499,6 +506,8 @@ private struct MessageBubble: View {
     private var messageContent: some View {
         if let stickerURL = message.stickerURL {
             sticker(url: stickerURL, animationURL: message.stickerAnimationURL)
+        } else if let video = message.videos.first {
+            videoBubble(video)
         } else if !message.photos.isEmpty {
             photoBubble
         } else {
@@ -531,6 +540,72 @@ private struct MessageBubble: View {
                 }
             }
         }
+    }
+
+    private func videoBubble(_ video: ChatVideo) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            VStack(spacing: 0) {
+                Button { onVideoTap(video) } label: {
+                    ZStack(alignment: .bottomLeading) {
+                        Group {
+                            if let thumbnailURL = video.thumbnailURL {
+                                CachedRemoteImage(url: thumbnailURL, contentMode: .fill) {
+                                    Color(.secondarySystemBackground)
+                                }
+                            } else {
+                                Color(.secondarySystemBackground)
+                            }
+                        }
+                        .frame(width: photoBubbleWidth, height: 190)
+                        .clipped()
+
+                        LinearGradient(
+                            colors: [.clear, .black.opacity(0.7)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 50))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(video.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                            Text(video.durationText)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                        .padding(10)
+                    }
+                    .frame(width: photoBubbleWidth, height: 190)
+                }
+                .buttonStyle(.plain)
+                .clipShape(TopRoundedRectangle(radius: 18))
+
+                if !message.text.isEmpty {
+                    photoMessageTextAndMetadata
+                        .foregroundStyle(message.isOutgoing ? .white : .primary)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(message.isOutgoing ? Color.appAccent : Color(.secondarySystemBackground))
+                }
+            }
+            .frame(width: photoBubbleWidth, alignment: .leading)
+            .compositingGroup()
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(alignment: .bottomTrailing) {
+                if message.text.isEmpty {
+                    imageMetadata
+                        .padding(6)
+                }
+            }
+        }
+        .accessibilityLabel("Видео: \(video.title)")
     }
 
     private func sticker(url: URL, animationURL: URL?) -> some View {
@@ -818,6 +893,48 @@ private struct ChatPhotoCollage: View {
     private var tileHeight: CGFloat {
         if visiblePhotos.count == 1 { return 260 }
         return visiblePhotos.count <= 4 ? 150 : 100
+    }
+}
+
+private struct ChatVideoPlayer: View {
+    @Environment(\.dismiss) private var dismiss
+    let video: ChatVideo
+    @State private var selectedQuality = ""
+    @State private var cacheToken: UUID?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            FullScreenVideoPlayerView(
+                title: video.title,
+                coverURLString: video.thumbnailURL?.absoluteString ?? "",
+                videoURLString: video.playerURL?.absoluteString,
+                files: video.files,
+                selectedQuality: $selectedQuality,
+                isActive: true
+            )
+
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(12)
+                    .background(.black.opacity(0.5), in: Circle())
+            }
+            .padding(.top, 18)
+            .padding(.trailing, 18)
+            .accessibilityLabel("Закрыть видео")
+        }
+        .onAppear {
+            selectedQuality = video.preferredQuality
+            if let url = video.preferredURL {
+                cacheToken = VideoSegmentCache.shared.startCaching(url)
+            }
+        }
+        .onDisappear {
+            if let cacheToken {
+                VideoSegmentCache.shared.stopCaching(cacheToken)
+            }
+        }
     }
 }
 

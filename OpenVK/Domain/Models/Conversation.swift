@@ -96,6 +96,7 @@ struct VKConversationAttachment: Decodable {
     let type: String?
     let sticker: VKSticker?
     let photo: VKMessagePhoto?
+    let video: VKVideoAttachment?
 }
 
 struct VKMessagePhoto: Decodable {
@@ -121,6 +122,41 @@ struct ChatPhoto: Identifiable, Hashable, Codable {
     init(id: Int?, ownerID: Int?, url: URL) {
         self.id = "\(ownerID ?? 0)_\(id ?? 0)_\(url.absoluteString)"
         self.url = url
+    }
+}
+
+struct ChatVideo: Identifiable, Hashable, Codable {
+    let id: String
+    let title: String
+    let duration: Int
+    let thumbnailURL: URL?
+    let playerURL: URL?
+    let files: [String: String]?
+
+    init(video: VKVideoAttachment) {
+        let videoID = video.id ?? 0
+        let ownerID = video.ownerId ?? 0
+        id = "\(ownerID)_\(videoID)"
+        title = video.title ?? "Видео"
+        duration = video.duration ?? 0
+        thumbnailURL = (video.image?.last?.url ?? video.image?.first?.url).flatMap(URL.init)
+        playerURL = video.player.flatMap(URL.init)
+        files = video.files
+    }
+
+    var preferredURL: URL? {
+        let preferredQualities = ["mp4_720", "mp4_480", "mp4_360", "mp4_240"]
+        return preferredQualities.compactMap { files?[$0].flatMap(URL.init) }.first ?? playerURL
+    }
+
+    var preferredQuality: String {
+        let preferredQualities = ["mp4_720", "mp4_480", "mp4_360", "mp4_240"]
+        return preferredQualities.first(where: { files?[$0] != nil }) ?? files?.keys.sorted().first ?? ""
+    }
+
+    var durationText: String {
+        let minutes = duration / 60
+        return String(format: "%d:%02d", minutes, duration % 60)
     }
 }
 
@@ -280,6 +316,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let stickerURL: URL?
     let stickerAnimationURL: URL?
     let photos: [ChatPhoto]
+    let videos: [ChatVideo]
     let systemEventText: String?
     let isDeleted: Bool
     let deliveryStatus: MessageDeliveryStatus?
@@ -291,7 +328,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         let body = message.body ?? message.text ?? ""
         let attachments = message.attachments ?? []
         let photos = attachments.compactMap { $0.photo?.chatPhoto }
-        text = body.isEmpty && !photos.isEmpty
+        let videos = attachments.compactMap { $0.video.map(ChatVideo.init) }
+        text = body.isEmpty && (!photos.isEmpty || !videos.isEmpty)
             ? ""
             : (body.isEmpty ? attachments.map { Self.attachmentTitle($0.type) }.joined(separator: " ") : body)
         date = Date(timeIntervalSince1970: TimeInterval(message.date ?? 0))
@@ -306,6 +344,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         senderAvatarURL = (profile?.photo200 ?? profile?.photo100).flatMap(URL.init)
         attachmentTypes = attachments.compactMap(\.type)
         self.photos = photos
+        self.videos = videos
         systemEventText = Self.systemEventText(
             action: message.action,
             actionMemberID: message.actionMid,
@@ -338,6 +377,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         stickerURL: URL?,
         stickerAnimationURL: URL?,
         photos: [ChatPhoto],
+        videos: [ChatVideo],
         systemEventText: String?,
         isDeleted: Bool,
         deliveryStatus: MessageDeliveryStatus?,
@@ -354,6 +394,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.stickerURL = stickerURL
         self.stickerAnimationURL = stickerAnimationURL
         self.photos = photos
+        self.videos = videos
         self.systemEventText = systemEventText
         self.isDeleted = isDeleted
         self.deliveryStatus = deliveryStatus
@@ -373,6 +414,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerURL: nil,
             stickerAnimationURL: nil,
             photos: [],
+            videos: [],
             systemEventText: nil,
             isDeleted: false,
             deliveryStatus: .sending
@@ -392,6 +434,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerURL: sticker.imageURL,
             stickerAnimationURL: sticker.animationURL,
             photos: [],
+            videos: [],
             systemEventText: nil,
             isDeleted: false,
             deliveryStatus: .sending
@@ -411,6 +454,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerURL: stickerURL,
             stickerAnimationURL: stickerAnimationURL,
             photos: photos,
+            videos: videos,
             systemEventText: systemEventText,
             isDeleted: isDeleted,
             deliveryStatus: status

@@ -302,6 +302,101 @@ final class ImageCache {
     }
 }
 
+final class VideoSegmentCache {
+    static let shared = VideoSegmentCache()
+
+    private let segmentSize = 2 * 1024 * 1024
+    private let fileManager = FileManager.default
+    private let queue = DispatchQueue(label: "org.openvk.video-segment-cache")
+    private var activeTasks: [UUID: URLSessionDataTask] = [:]
+    private lazy var directory: URL = {
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let directory = caches.appendingPathComponent("openvk_video_segments_v1", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }()
+
+    private init() {}
+
+    @discardableResult
+    func startCaching(_ url: URL) -> UUID {
+        let token = UUID()
+        queue.async { [weak self] in
+            self?.cacheNextSegment(for: url, offset: 0, token: token)
+        }
+        return token
+    }
+
+    func stopCaching(_ token: UUID) {
+        queue.async { [weak self] in
+            self?.activeTasks.removeValue(forKey: token)?.cancel()
+        }
+    }
+
+    func clear() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.activeTasks.values.forEach { $0.cancel() }
+            self.activeTasks.removeAll()
+            try? self.fileManager.removeItem(at: self.directory)
+        }
+    }
+
+    func cacheSizeBytes() -> Int64 {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: .skipsHiddenFiles
+        ) else { return 0 }
+        return files.compactMap {
+            (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+        }.reduce(0) { $0 + Int64($1) }
+    }
+
+    private func cacheNextSegment(for url: URL, offset: Int, token: UUID) {
+        guard activeTasks[token] == nil else { return }
+        let fileURL = segmentURL(for: url, offset: offset)
+        if let data = try? Data(contentsOf: fileURL), !data.isEmpty {
+            cacheNextSegment(for: url, offset: offset + data.count, token: token)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("bytes=\(offset)-\(offset + segmentSize - 1)", forHTTPHeaderField: "Range")
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let self else { return }
+            self.queue.async {
+                guard self.activeTasks.removeValue(forKey: token) != nil,
+                      let data, !data.isEmpty else { return }
+                try? self.fileManager.createDirectory(at: self.directory, withIntermediateDirectories: true)
+                try? data.write(to: fileURL, options: .atomic)
+
+                let totalLength = self.totalLength(from: response)
+                let nextOffset = offset + data.count
+                if totalLength.map({ nextOffset < $0 }) ?? (data.count == self.segmentSize) {
+                    self.cacheNextSegment(for: url, offset: nextOffset, token: token)
+                }
+            }
+        }
+        activeTasks[token] = task
+        task.resume()
+    }
+
+    private func segmentURL(for url: URL, offset: Int) -> URL {
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent("\(name)-\(offset)").appendingPathExtension("segment")
+    }
+
+    private func totalLength(from response: URLResponse?) -> Int? {
+        guard let http = response as? HTTPURLResponse,
+              let range = http.value(forHTTPHeaderField: "Content-Range"),
+              let totalString = range.split(separator: "/").last,
+              let total = Int(totalString) else { return nil }
+        return total
+    }
+}
+
 struct CachedRemoteImage<Placeholder: View>: View {
     let url: URL
     let contentMode: ContentMode
@@ -541,6 +636,7 @@ final class CacheService {
         lock.unlock()
 
         ImageCache.shared.clear()
+        VideoSegmentCache.shared.clear()
         URLCache.shared.removeAllCachedResponses()
     }
 
@@ -549,7 +645,9 @@ final class CacheService {
         cleanupExpiredRecords()
         let responseCacheBytes = directorySize(url: cacheDirectory)
         lock.unlock()
-        return responseCacheBytes + ImageCache.shared.diskCacheSizeBytes() + Int64(URLCache.shared.currentDiskUsage)
+        return responseCacheBytes + ImageCache.shared.diskCacheSizeBytes()
+            + VideoSegmentCache.shared.cacheSizeBytes()
+            + Int64(URLCache.shared.currentDiskUsage)
     }
 
     func totalCacheSizeString() -> String {
