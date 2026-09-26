@@ -10,7 +10,6 @@ struct ProfileHeaderView: View {
     let user: User
     let avatarRefreshToken: UUID
     @State private var isFriendLocal: Bool = false
-    @State private var showMessageStub = false
 
     var isCurrentUser: Bool {
         user.isCurrentUser
@@ -138,8 +137,8 @@ struct ProfileHeaderView: View {
                             .cornerRadius(8)
                         }
 
-                        Button {
-                            showMessageStub = true
+                        NavigationLink {
+                            ChatView(conversation: directConversation)
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "bubble.left")
@@ -167,11 +166,21 @@ struct ProfileHeaderView: View {
             }
         }
         .background(Color(.systemBackground))
-        .alert("Недоступно", isPresented: $showMessageStub) {
-            Button("ОК", role: .cancel) {}
-        } message: {
-            Text("Личные сообщения временно недоступны.")
-        }
+    }
+
+    private var directConversation: Conversation {
+        Conversation(
+            id: user.uid ?? 0,
+            peer: user,
+            lastMessage: "",
+            lastMessageAuthorName: nil,
+            lastMessageOutgoing: false,
+            updatedAt: Date(),
+            unreadCount: 0,
+            lastMessageId: 0,
+            lastMessageReadState: nil,
+            isChat: false
+        )
     }
 
     private func toggleGroupMembership() {

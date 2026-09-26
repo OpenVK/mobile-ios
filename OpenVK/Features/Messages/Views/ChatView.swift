@@ -58,6 +58,7 @@ struct ChatView: View {
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { composerHeight = $0 }
         .onChange(of: text) { viewModel.sendTyping(for: $0) }
         .navigationBarTitleDisplayMode(.inline)
+        .chatTabBarHidden()
         .toolbar {
             ToolbarItem(placement: .principal) {
                 if conversation.isChat {
@@ -465,6 +466,16 @@ private struct StickerPickerPanel: View {
             CachedRemoteImage(url: url, contentMode: .fit) { ProgressView() }
         } else {
             Image(systemName: "face.smiling").foregroundStyle(.secondary)
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder func chatTabBarHidden() -> some View {
+        if #available(iOS 16.0, *) {
+            self.toolbar(.hidden, for: .tabBar)
+        } else {
+            self
         }
     }
 }
