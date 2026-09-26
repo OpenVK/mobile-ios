@@ -23,7 +23,7 @@ struct MessagesView: View {
     }
 
     var body: some View {
-        NavigationView {
+        MessagesNavigationContainer {
             content
                 .navigationTitle("Сообщения")
                 .toolbar {
@@ -234,6 +234,23 @@ private extension View {
             self.toolbar(isHidden ? .hidden : .visible, for: .tabBar)
         } else {
             self
+        }
+    }
+}
+
+private struct MessagesNavigationContainer<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if #available(iOS 16.0, *) {
+            NavigationStack {
+                content()
+            }
+        } else {
+            NavigationView {
+                content()
+            }
+            .navigationViewStyle(StackNavigationViewStyle())
         }
     }
 }

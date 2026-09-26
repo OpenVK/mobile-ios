@@ -9,6 +9,7 @@ struct ChatView: View {
     @State private var isEmojiPanelPresented = false
     @State private var recentStickers: [VKSticker] = []
     @State private var selectedVideo: ChatVideo?
+    @State private var profileToShow: User?
     @FocusState private var isComposerFocused: Bool
     @Binding var selectedMedia: Attachment?
     @Binding var owningPost: Post?
@@ -62,8 +63,8 @@ struct ChatView: View {
                 if conversation.isChat {
                     chatTitle
                 } else {
-                    NavigationLink {
-                        ProfileView(user: conversation.peer)
+                    Button {
+                        profileToShow = conversation.peer
                     } label: {
                         chatTitle
                     }
@@ -75,6 +76,7 @@ struct ChatView: View {
             viewModel.load()
             viewModel.startListening()
         }
+        .background(profileNavigationLink)
         .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
@@ -136,6 +138,8 @@ struct ChatView: View {
                             openPhotoViewer(for: photo)
                         } onVideoTap: { video in
                             selectedVideo = video
+                        } onProfileTap: { user in
+                            profileToShow = user
                         }
                             .id(message.id)
                             .onAppear { viewModel.loadOlderIfNeeded(message: message) }
@@ -208,6 +212,27 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    private var profileNavigationLink: some View {
+        NavigationLink(
+            destination: Group {
+                if let profileToShow {
+                    ProfileView(
+                        user: profileToShow,
+                        selectedMedia: $selectedMedia,
+                        owningPost: $owningPost
+                    )
+                }
+            },
+            isActive: Binding(
+                get: { profileToShow != nil },
+                set: { if !$0 { profileToShow = nil } }
+            )
+        ) {
+            EmptyView()
+        }
+        .hidden()
     }
 
     private func shouldShowSenderDetails(for index: Int) -> Bool {
@@ -478,6 +503,7 @@ private struct MessageBubble: View {
     let joinsNext: Bool
     let onPhotoTap: (ChatPhoto) -> Void
     let onVideoTap: (ChatVideo) -> Void
+    let onProfileTap: (User) -> Void
 
     var body: some View {
         Group {
@@ -488,8 +514,8 @@ private struct MessageBubble: View {
                     if message.isOutgoing { Spacer(minLength: 48) }
                     if !message.isOutgoing && isChat && !isStickerMessage {
                         if showsSenderDetails {
-                            NavigationLink {
-                                ProfileView(user: sender)
+                            Button {
+                                onProfileTap(sender)
                             } label: {
                                 Avatar(user: sender, size: 26)
                             }
@@ -627,8 +653,8 @@ private struct MessageBubble: View {
     private var bubble: some View {
         VStack(alignment: .leading, spacing: 3) {
             if isChat, !message.isOutgoing, showsSenderDetails, let senderName = message.senderName {
-                NavigationLink {
-                    ProfileView(user: sender)
+                Button {
+                    onProfileTap(sender)
                 } label: {
                     Text(senderName)
                         .font(.caption.weight(.semibold))
