@@ -1,5 +1,7 @@
 import SwiftUI
 import Lottie
+import Foundation
+import UIKit
 
 struct ChatView: View {
     let conversation: Conversation
@@ -181,6 +183,8 @@ struct ChatView: View {
                             selectedVideo = video
                         } onProfileTap: { user in
                             profileToShow = user
+                        } onMentionTap: { username in
+                            openProfile(forMention: username)
                         } onReply: { message in
                             replyToMessage = message
                             editingMessage = nil
@@ -430,7 +434,6 @@ struct ChatView: View {
         recentStickers.removeAll { $0.identifier == sticker.identifier }
         recentStickers.insert(sticker, at: 0)
         recentStickers = Array(recentStickers.prefix(32))
-        isEmojiPanelPresented = false
     }
 
     private func openPhotoViewer(for photo: ChatPhoto) {
@@ -456,6 +459,14 @@ struct ChatView: View {
         }
     }
 
+    private func openProfile(forMention username: String) {
+        ProfileService.shared.fetchProfile(username: username) { result in
+            if case .success(let user) = result {
+                profileToShow = user
+            }
+        }
+    }
+
 }
 
 private struct ChatMessageFramePreferenceKey: PreferenceKey {
@@ -476,50 +487,66 @@ private struct StickerPickerPanel: View {
     private let grid = [GridItem(.adaptive(minimum: 62), spacing: 6)]
 
     var body: some View {
-        VStack(spacing: 0) {
-            packTabs
-            Divider()
-            content
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                packTabs { sectionID in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(sectionID, anchor: .top)
+                    }
+                }
+                Divider()
+                content
+            }
         }
         .background(Color(.secondarySystemBackground).opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    private var packTabs: some View {
+    private func packTabs(onSelect: @escaping (String) -> Void) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 if !recentStickers.isEmpty {
-                    Image(systemName: "clock.fill")
-                        .foregroundStyle(Color.appAccent)
-                        .frame(width: 38, height: 38)
-                        .background(Color.appAccent.opacity(0.12), in: Circle())
+                    Button { onSelect("recent") } label: {
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Недавние")
                 }
                 ForEach(packs) { pack in
-                    stickerImage(url: pack.coverURL)
-                        .frame(width: 38, height: 38)
-                        .background(Color.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .accessibilityLabel(pack.displayName)
+                    Button { onSelect(sectionID(for: pack)) } label: {
+                        stickerImage(url: pack.coverURL)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(pack.displayName)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, 6)
         }
-        .frame(height: 52)
+        .frame(height: 44)
     }
 
     @ViewBuilder
     private var content: some View {
         if isLoading && packs.isEmpty {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if packs.isEmpty {
+        } else if packs.isEmpty && recentStickers.isEmpty {
             ContentUnavailableView("Нет стикерпаков", systemImage: "face.smiling", description: Text("Установленные стикерпаки появятся здесь."))
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if !recentStickers.isEmpty { stickerSection(title: "Недавние", stickers: recentStickers) }
+                    if !recentStickers.isEmpty {
+                        stickerSection(title: "Недавние", stickers: recentStickers)
+                            .id("recent")
+                    }
                     ForEach(packs) { pack in
                         stickerSection(title: pack.displayName, stickers: pack.stickers ?? [])
+                            .id(sectionID(for: pack))
                     }
                 }
                 .padding(.horizontal, 12)
@@ -540,6 +567,10 @@ private struct StickerPickerPanel: View {
                 }
             }
         }
+    }
+
+    private func sectionID(for pack: VKStickerPack) -> String {
+        "pack-\(pack.id)"
     }
 
     @ViewBuilder
@@ -608,6 +639,69 @@ private struct ComposerHeightPreferenceKey: PreferenceKey {
     }
 }
 
+private struct ChatMentionText: View {
+    let text: String
+    let isOutgoing: Bool
+    let isDeleted: Bool
+    let onMentionTap: (String) -> Void
+
+    var body: some View {
+        Text(attributedText)
+            .font(.system(size: 16))
+            .foregroundStyle(isOutgoing ? .white : (isDeleted ? .secondary : .primary))
+            .environment(\.openURL, OpenURLAction { url in
+                guard url.scheme == "openvk-profile", let username = url.host else {
+                    return .systemAction
+                }
+                onMentionTap(username)
+                return .handled
+            })
+    }
+
+    private var attributedText: AttributedString {
+        guard !isDeleted,
+              let expression = try? NSRegularExpression(
+                pattern: "\\[([^\\]|]+)\\|([^\\]]+)\\]|@([A-Za-zА-Яа-яЁё0-9_]+)"
+              ) else {
+            return AttributedString(text)
+        }
+
+        let matches = expression.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        var result = AttributedString()
+        var cursor = text.startIndex
+
+        for match in matches {
+            guard let range = Range(match.range, in: text) else { continue }
+            result.append(AttributedString(String(text[cursor..<range.lowerBound])))
+
+            let identifierRange = match.range(at: 1)
+            let displayRange = match.range(at: 2)
+            let nicknameRange = match.range(at: 3)
+            let identifier: String
+            let displayName: String
+            if let range = Range(identifierRange, in: text), identifierRange.location != NSNotFound {
+                identifier = String(text[range])
+                displayName = Range(displayRange, in: text).map { String(text[$0]) } ?? identifier
+            } else if let range = Range(nicknameRange, in: text) {
+                identifier = String(text[range])
+                displayName = "@\(identifier)"
+            } else {
+                result.append(AttributedString(String(text[range])))
+                cursor = range.upperBound
+                continue
+            }
+
+            var mention = AttributedString(displayName)
+            mention.link = URL(string: "openvk-profile://\(identifier)")
+            mention.foregroundColor = isOutgoing ? .white : Color.appAccent
+            result.append(mention)
+            cursor = range.upperBound
+        }
+        result.append(AttributedString(String(text[cursor...])))
+        return result
+    }
+}
+
 private struct MessageBubble: View {
     let message: ChatMessage
     let isChat: Bool
@@ -617,6 +711,7 @@ private struct MessageBubble: View {
     let onPhotoTap: (ChatPhoto) -> Void
     let onVideoTap: (ChatVideo) -> Void
     let onProfileTap: (User) -> Void
+    let onMentionTap: (String) -> Void
     let onReply: (ChatMessage) -> Void
     let onEdit: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
@@ -852,9 +947,12 @@ private struct MessageBubble: View {
     }
 
     private var messageText: some View {
-        Text(message.isDeleted ? "Сообщение удалено" : message.text)
-            .font(.system(size: 16))
-            .foregroundStyle(message.isOutgoing ? .white : (message.isDeleted ? .secondary : .primary))
+        ChatMentionText(
+            text: message.isDeleted ? "Сообщение удалено" : message.text,
+            isOutgoing: message.isOutgoing,
+            isDeleted: message.isDeleted,
+            onMentionTap: onMentionTap
+        )
     }
 
     private var photoMessageTextAndMetadata: some View {
@@ -876,7 +974,7 @@ private struct MessageBubble: View {
             }
     }
 
-    private var metadataSlotWidth: CGFloat { 50 }
+    private var metadataSlotWidth: CGFloat { message.isEdited ? 76 : 50 }
 
     private var timeLabel: some View {
         Text(message.date, style: .time)
@@ -886,6 +984,11 @@ private struct MessageBubble: View {
 
     private var messageMetadata: some View {
         HStack(spacing: 4) {
+            if message.isEdited {
+                Text("ред.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(message.isOutgoing ? .white.opacity(0.75) : .secondary)
+            }
             timeLabel
             if let status = message.deliveryStatus {
                 deliveryStatusLabel(status)

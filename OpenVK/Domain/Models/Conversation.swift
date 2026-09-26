@@ -263,6 +263,8 @@ struct VKHistoryMessage: Decodable {
     let readState: Int?
     let action: VKMessageAction?
     let actionMid: Int?
+    let edited: Bool?
+    let editedAt: Int?
 }
 
 struct VKMessageAction: Decodable {
@@ -319,6 +321,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let videos: [ChatVideo]
     let systemEventText: String?
     let isDeleted: Bool
+    let isEdited: Bool
     let deliveryStatus: MessageDeliveryStatus?
     let endsChatParticipation: Bool
 
@@ -362,6 +365,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             ? attachments.first?.sticker?.animationURL
             : nil
         isDeleted = message.deleted == 1
+        isEdited = message.edited == true || message.editedAt != nil
         deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
     }
 
@@ -380,6 +384,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         videos: [ChatVideo],
         systemEventText: String?,
         isDeleted: Bool,
+        isEdited: Bool = false,
         deliveryStatus: MessageDeliveryStatus?,
         endsChatParticipation: Bool = false
     ) {
@@ -397,6 +402,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.videos = videos
         self.systemEventText = systemEventText
         self.isDeleted = isDeleted
+        self.isEdited = isEdited
         self.deliveryStatus = deliveryStatus
         self.endsChatParticipation = endsChatParticipation
     }
@@ -417,6 +423,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             videos: [],
             systemEventText: nil,
             isDeleted: false,
+            isEdited: false,
             deliveryStatus: .sending
         )
     }
@@ -437,6 +444,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             videos: [],
             systemEventText: nil,
             isDeleted: false,
+            isEdited: false,
             deliveryStatus: .sending
         )
     }
@@ -457,6 +465,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             videos: videos,
             systemEventText: systemEventText,
             isDeleted: isDeleted,
+            isEdited: isEdited,
             deliveryStatus: status
         )
     }
@@ -466,7 +475,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             id: id, text: value, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
-            systemEventText: systemEventText, isDeleted: isDeleted, deliveryStatus: deliveryStatus
+            systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus
         )
     }
 
@@ -475,7 +484,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             id: id, text: text, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
-            systemEventText: systemEventText, isDeleted: true, deliveryStatus: deliveryStatus
+            systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus
         )
     }
 
