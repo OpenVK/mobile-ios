@@ -8,7 +8,7 @@ import Foundation
 protocol MessagesServiceProtocol {
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func fetchHistory(peerID: Int, offset: Int, count: Int, completion: @escaping (Result<MessagesPage, Error>) -> Void)
-    func sendMessage(peerID: Int, text: String, completion: @escaping (Result<Int, Error>) -> Void)
+    func sendMessage(peerID: Int, text: String, replyTo: Int?, completion: @escaping (Result<Int, Error>) -> Void)
     func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void)
     func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
     func setTyping(peerID: Int)
@@ -16,6 +16,8 @@ protocol MessagesServiceProtocol {
     func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func deleteConversation(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func editMessage(peerID: Int, messageID: Int, text: String, completion: @escaping (Result<Void, Error>) -> Void)
+    func deleteMessage(peerID: Int, messageID: Int, forAll: Bool, completion: @escaping (Result<Void, Error>) -> Void)
 }
 
 final class MessagesService: MessagesServiceProtocol {
@@ -62,10 +64,12 @@ final class MessagesService: MessagesServiceProtocol {
         }
     }
 
-    func sendMessage(peerID: Int, text: String, completion: @escaping (Result<Int, Error>) -> Void) {
+    func sendMessage(peerID: Int, text: String, replyTo: Int?, completion: @escaping (Result<Int, Error>) -> Void) {
+        var parameters = ["peer_id": String(peerID), "message": text, "random_id": String(Int.random(in: 1...Int.max))]
+        if let replyTo { parameters["reply_to"] = String(replyTo) }
         client.call(
             method: "messages.send",
-            parameters: ["peer_id": String(peerID), "message": text, "random_id": String(Int.random(in: 1...Int.max))],
+            parameters: parameters,
             httpMethod: "POST",
             as: Int.self,
             completion: { result in completion(result.mapError { $0 as Error }) }
@@ -152,6 +156,32 @@ final class MessagesService: MessagesServiceProtocol {
             parameters: ["peer_id": String(peerID)],
             httpMethod: "POST",
             as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func editMessage(peerID: Int, messageID: Int, text: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.edit",
+            parameters: ["peer_id": String(peerID), "message_id": String(messageID), "message": text],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func deleteMessage(peerID: Int, messageID: Int, forAll: Bool, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.delete",
+            parameters: [
+                "peer_id": String(peerID),
+                "message_ids": String(messageID),
+                "delete_for_all": forAll ? "1" : "0"
+            ],
+            httpMethod: "POST",
+            as: [String: Int].self
         ) { result in
             completion(result.map { _ in () }.mapError { $0 as Error })
         }

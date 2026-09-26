@@ -10,6 +10,9 @@ struct ChatView: View {
     @State private var recentStickers: [VKSticker] = []
     @State private var selectedVideo: ChatVideo?
     @State private var profileToShow: User?
+    @State private var replyToMessage: ChatMessage?
+    @State private var editingMessage: ChatMessage?
+    @State private var messageToDelete: ChatMessage?
     @FocusState private var isComposerFocused: Bool
     @Binding var selectedMedia: Attachment?
     @Binding var owningPost: Post?
@@ -81,6 +84,24 @@ struct ChatView: View {
         .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
+        .confirmationDialog("Удалить сообщение?", isPresented: Binding(
+            get: { messageToDelete != nil },
+            set: { if !$0 { messageToDelete = nil } }
+        )) {
+            if let messageToDelete {
+                Button("Удалить для себя", role: .destructive) {
+                    viewModel.delete(message: messageToDelete, forAll: false)
+                    self.messageToDelete = nil
+                }
+                if messageToDelete.isOutgoing {
+                    Button("Удалить у всех", role: .destructive) {
+                        viewModel.delete(message: messageToDelete, forAll: true)
+                        self.messageToDelete = nil
+                    }
+                }
+            }
+            Button("Отмена", role: .cancel) { messageToDelete = nil }
+        }
         .fullScreenCover(item: $selectedVideo) { video in
             ChatVideoPlayer(video: video)
         }
@@ -141,6 +162,17 @@ struct ChatView: View {
                             selectedVideo = video
                         } onProfileTap: { user in
                             profileToShow = user
+                        } onReply: { message in
+                            replyToMessage = message
+                            editingMessage = nil
+                            isComposerFocused = true
+                        } onEdit: { message in
+                            editingMessage = message
+                            replyToMessage = nil
+                            text = message.text
+                            isComposerFocused = true
+                        } onDelete: { message in
+                            messageToDelete = message
                         }
                             .id(message.id)
                             .onAppear { viewModel.loadOlderIfNeeded(message: message) }
@@ -162,17 +194,6 @@ struct ChatView: View {
                 .padding(.vertical, 10)
             }
             .coordinateSpace(name: "chat-history")
-            .overlay(alignment: .bottom) {
-                if conversation.isChat, let typing = viewModel.typingText {
-                    Text(typing + "…")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(.thinMaterial, in: Capsule())
-                        .padding(.bottom, 8)
-                }
-            }
             .onPreferenceChange(ChatMessageFramePreferenceKey.self) { frames in
                 let visibleMessage = frames
                     .filter { $0.value.maxY > 0 && $0.value.minY < viewportHeight }
@@ -256,6 +277,16 @@ struct ChatView: View {
         let maximumLines = max(1, Int((maxHeight - 20) / 22))
 
         return VStack(spacing: 8) {
+            if let editingMessage {
+                messageActionBanner(title: "Редактирование сообщения", subtitle: editingMessage.text) {
+                    self.editingMessage = nil
+                    text = ""
+                }
+            } else if let replyToMessage {
+                messageActionBanner(title: "Ответ: \(replyToMessage.senderName ?? "Пользователь")", subtitle: replyToMessage.text) {
+                    self.replyToMessage = nil
+                }
+            }
             composerControls(maximumLines: maximumLines)
 
             if isEmojiPanelPresented {
@@ -324,7 +355,13 @@ struct ChatView: View {
                 Button {
                     let value = text
                     text = ""
-                    viewModel.send(text: value)
+                    if let editingMessage {
+                        viewModel.edit(message: editingMessage, text: value)
+                        self.editingMessage = nil
+                    } else {
+                        viewModel.send(text: value, replyTo: replyToMessage?.id)
+                        replyToMessage = nil
+                    }
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 17, weight: .semibold))
@@ -342,6 +379,23 @@ struct ChatView: View {
 
     private var hasMessageText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    @available(iOS 26.0, *)
+    private func messageActionBanner(title: String, subtitle: String, cancel: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.caption.weight(.semibold))
+                Text(subtitle.isEmpty ? "Вложение" : subtitle)
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button(action: cancel) { Image(systemName: "xmark.circle.fill") }
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func sendSticker(_ sticker: VKSticker) {
@@ -515,6 +569,10 @@ private struct MessageBubble: View {
     let onPhotoTap: (ChatPhoto) -> Void
     let onVideoTap: (ChatVideo) -> Void
     let onProfileTap: (User) -> Void
+    let onReply: (ChatMessage) -> Void
+    let onEdit: (ChatMessage) -> Void
+    let onDelete: (ChatMessage) -> Void
+    @State private var swipeOffset: CGFloat = 0
 
     var body: some View {
         Group {
@@ -541,6 +599,61 @@ private struct MessageBubble: View {
             }
         }
         .padding(.top, joinsPrevious ? 0 : 4)
+        .contentShape(Rectangle())
+        .offset(x: swipeOffset)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: swipeOffset)
+        .contextMenu {
+            if message.systemEventText == nil {
+            if !message.text.isEmpty && !message.isDeleted {
+                Button {
+                    UIPasteboard.general.string = message.text
+                } label: {
+                    Label("Копировать", systemImage: "doc.on.doc")
+                }
+            }
+            if !message.isDeleted, message.id > 0 {
+                Button {
+                    onReply(message)
+                } label: {
+                    Label("Ответить", systemImage: "arrowshape.turn.up.left")
+                }
+            }
+            if message.isOutgoing, !message.isDeleted, message.id > 0, !message.text.isEmpty {
+                Button {
+                    onEdit(message)
+                } label: {
+                    Label("Редактировать", systemImage: "pencil")
+                }
+            }
+            if !message.isDeleted, message.id > 0 {
+                Button(role: .destructive) {
+                    onDelete(message)
+                } label: {
+                    Label("Удалить", systemImage: "trash")
+                        .foregroundStyle(.red)
+                }
+            }
+            }
+        }
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 24)
+                .onChanged { value in
+                    guard message.systemEventText == nil,
+                          !message.isDeleted,
+                          message.id > 0,
+                          abs(value.translation.width) > abs(value.translation.height) else { return }
+                    swipeOffset = min(0, max(-84, value.translation.width))
+                }
+                .onEnded { value in
+                    defer { swipeOffset = 0 }
+                    guard value.translation.width < -60,
+                          abs(value.translation.width) > abs(value.translation.height),
+                          message.systemEventText == nil,
+                          !message.isDeleted,
+                          message.id > 0 else { return }
+                    onReply(message)
+                }
+        )
     }
 
     @ViewBuilder

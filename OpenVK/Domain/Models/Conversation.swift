@@ -461,6 +461,24 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         )
     }
 
+    func updatingText(_ value: String) -> ChatMessage {
+        ChatMessage(
+            id: id, text: value, date: date, isOutgoing: isOutgoing, senderID: senderID,
+            senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
+            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
+            systemEventText: systemEventText, isDeleted: isDeleted, deliveryStatus: deliveryStatus
+        )
+    }
+
+    func markingDeleted() -> ChatMessage {
+        ChatMessage(
+            id: id, text: text, date: date, isOutgoing: isOutgoing, senderID: senderID,
+            senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
+            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
+            systemEventText: systemEventText, isDeleted: true, deliveryStatus: deliveryStatus
+        )
+    }
+
     private static func attachmentTitle(_ type: String?) -> String {
         switch type?.lowercased() {
         case "photo": return "[Фотография]"

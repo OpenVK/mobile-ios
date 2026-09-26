@@ -124,7 +124,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func send(text: String) {
+    func send(text: String, replyTo: Int? = nil) {
         guard canSendMessages else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
@@ -132,7 +132,7 @@ final class ChatViewModel: ObservableObject {
         messages.append(pendingMessage)
         requestScroll(.bottom(animated: true))
 
-        service.sendMessage(peerID: conversation.id, text: value) { [weak self] result in
+        service.sendMessage(peerID: conversation.id, text: value, replyTo: replyTo) { [weak self] result in
             guard let self else { return }
             guard let index = self.messages.firstIndex(where: { $0.id == pendingMessage.id }) else { return }
             switch result {
@@ -146,6 +146,25 @@ final class ChatViewModel: ObservableObject {
             case .failure:
                 self.messages[index] = pendingMessage.updatingDeliveryStatus(.failed)
             }
+        }
+    }
+
+    func edit(message: ChatMessage, text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard message.isOutgoing, message.id > 0, !value.isEmpty else { return }
+        service.editMessage(peerID: conversation.id, messageID: message.id, text: value) { [weak self] result in
+            guard case .success = result, let self,
+                  let index = self.messages.firstIndex(where: { $0.id == message.id }) else { return }
+            self.messages[index] = self.messages[index].updatingText(value)
+        }
+    }
+
+    func delete(message: ChatMessage, forAll: Bool) {
+        guard message.id > 0 else { return }
+        service.deleteMessage(peerID: conversation.id, messageID: message.id, forAll: forAll) { [weak self] result in
+            guard case .success = result, let self,
+                  let index = self.messages.firstIndex(where: { $0.id == message.id }) else { return }
+            self.messages[index] = self.messages[index].markingDeleted()
         }
     }
 
