@@ -119,6 +119,105 @@ final class CreateChatViewModel: ObservableObject {
         }
     }
 
+    func createConversation(
+        title: String,
+        memberIDs: [Int],
+        avatarData: Data?,
+        completion: @escaping (Result<Conversation, Error>) -> Void
+    ) {
+        APIClient.shared.call(
+            method: "messages.createChat",
+            parameters: ["title": title, "user_ids": memberIDs.map(String.init).joined(separator: ",")],
+            httpMethod: "POST",
+            as: Int.self
+        ) { [weak self] result in
+            switch result {
+            case .success(let chatID):
+                let conversation = self?.newConversation(chatID: chatID, title: title, memberCount: memberIDs.count + 1)
+                guard let conversation else { return }
+                guard let avatarData else {
+                    completion(.success(conversation))
+                    return
+                }
+                self?.uploadChatAvatar(avatarData, chatID: chatID) { uploadResult in
+                    switch uploadResult {
+                    case .success:
+                        completion(.success(conversation))
+                    case .failure:
+                        completion(.success(conversation))
+                    }
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    private func newConversation(chatID: Int, title: String, memberCount: Int) -> Conversation {
+        Conversation(
+            id: 2_000_000_000 + chatID,
+            peer: User(
+                uid: 2_000_000_000 + chatID,
+                username: "chat\(chatID)",
+                displayName: title,
+                isGroup: true
+            ),
+            lastMessage: "",
+            lastMessageAuthorName: nil,
+            lastMessageOutgoing: false,
+            updatedAt: Date(),
+            unreadCount: 0,
+            lastMessageId: 0,
+            lastMessageReadState: nil,
+            isChat: true,
+            chatMemberCount: memberCount
+        )
+    }
+
+    private func uploadChatAvatar(_ data: Data, chatID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        APIClient.shared.call(
+            method: "photos.getChatUploadServer",
+            parameters: ["chat_id": String(chatID)],
+            httpMethod: "GET",
+            as: ChatUploadServer.self
+        ) { result in
+            switch result {
+            case .success(let server):
+                APIClient.shared.upload(
+                    urlString: server.uploadUrl,
+                    fileData: data,
+                    fileName: "chat_avatar.jpg",
+                    mimeType: "image/jpeg"
+                ) { uploadResult in
+                    switch uploadResult {
+                    case .success(let responseData):
+                        do {
+                            let uploaded = try JSONDecoder().decode(ChatAvatarUpload.self, from: responseData)
+                            APIClient.shared.call(
+                                method: "messages.setChatPhoto",
+                                parameters: [
+                                    "chat_id": String(chatID),
+                                    "file": uploaded.photo,
+                                    "hash": uploaded.hash
+                                ],
+                                httpMethod: "POST",
+                                as: ChatPhotoUpdate.self
+                            ) { result in
+                                completion(result.map { _ in () }.mapError { $0 as Error })
+                            }
+                        } catch {
+                            completion(.failure(error))
+                        }
+                    case .failure(let error):
+                        completion(.failure(error))
+                    }
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
     private func loadFriendsPage() {
         let ownerID = AuthService.shared.currentUser?.uid ?? 0
         let parameters: [String: String] = [
@@ -175,3 +274,14 @@ final class CreateChatViewModel: ObservableObject {
         )
     }
 }
+
+private struct ChatUploadServer: Decodable {
+    let uploadUrl: String
+}
+
+private struct ChatAvatarUpload: Decodable {
+    let photo: String
+    let hash: String
+}
+
+private struct ChatPhotoUpdate: Decodable {}
