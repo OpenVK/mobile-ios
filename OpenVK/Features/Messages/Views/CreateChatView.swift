@@ -10,6 +10,7 @@ struct CreateChatView: View {
     @StateObject private var viewModel = CreateChatViewModel()
     @State private var query = ""
     @State private var showConversationStub = false
+    @State private var selectedUser: User?
 
     var body: some View {
         NavigationView {
@@ -70,6 +71,9 @@ struct CreateChatView: View {
                         }
                     }
             }
+        }
+        .fullScreenCover(item: $selectedUser) { user in
+            DirectMessageFullScreenView(conversation: directConversation(with: user))
         }
     }
 
@@ -174,7 +178,7 @@ struct CreateChatView: View {
 
     private func userRow(_ user: User) -> some View {
         Button {
-            showConversationStub = true
+            selectedUser = user
         } label: {
             HStack(spacing: 12) {
                 Avatar(user: user, size: 44)
@@ -195,6 +199,21 @@ struct CreateChatView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private func directConversation(with user: User) -> Conversation {
+        Conversation(
+            id: user.uid ?? 0,
+            peer: user,
+            lastMessage: "",
+            lastMessageAuthorName: nil,
+            lastMessageOutgoing: false,
+            updatedAt: Date(),
+            unreadCount: 0,
+            lastMessageId: 0,
+            lastMessageReadState: nil,
+            isChat: false
+        )
     }
 
     private func alphabetIndex(proxy: ScrollViewProxy) -> some View {
@@ -246,5 +265,26 @@ struct CreateChatView: View {
         withAnimation(.easeOut(duration: 0.12)) {
             proxy.scrollTo(letter, anchor: .top)
         }
+    }
+}
+
+private struct DirectMessageFullScreenView: View {
+    @Environment(\.dismiss) private var dismiss
+    let conversation: Conversation
+
+    var body: some View {
+        NavigationView {
+            ChatView(conversation: conversation)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button(action: dismiss.callAsFunction) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .accessibilityLabel("К выбору получателя")
+                    }
+                }
+        }
+        .navigationViewStyle(.stack)
     }
 }

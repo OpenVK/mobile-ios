@@ -80,7 +80,7 @@ struct ChatView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .chatToolbarCapsule()
+                .chatToolbarCapsule(animationToken: toolbarCapsuleAnimationToken)
             }
         }
         .task {
@@ -140,6 +140,18 @@ struct ChatView: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private var toolbarCapsuleAnimationToken: String {
+        let subtitle: String
+        if let typing = viewModel.typingText {
+            subtitle = typing
+        } else if conversation.isChat, let count = conversation.chatMemberCount {
+            subtitle = "\(count) \(memberCountWord(count))"
+        } else {
+            subtitle = viewModel.peerPresenceText ?? ""
+        }
+        return "\(conversation.peer.displayName)|\(subtitle)"
     }
 
     private func memberCountWord(_ count: Int) -> String {
@@ -340,6 +352,9 @@ struct ChatView: View {
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .onTapGesture {
+                    isEmojiPanelPresented = false
+                }
                 .overlay(alignment: .trailing) {
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
@@ -382,6 +397,11 @@ struct ChatView: View {
             }
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.78), value: hasMessageText)
+        .onChange(of: isComposerFocused) { isFocused in
+            if isFocused {
+                isEmojiPanelPresented = false
+            }
+        }
     }
 
     private var hasMessageText: Bool {
@@ -410,6 +430,7 @@ struct ChatView: View {
         recentStickers.removeAll { $0.identifier == sticker.identifier }
         recentStickers.insert(sticker, at: 0)
         recentStickers = Array(recentStickers.prefix(32))
+        isEmojiPanelPresented = false
     }
 
     private func openPhotoViewer(for photo: ChatPhoto) {
@@ -532,12 +553,13 @@ private struct StickerPickerPanel: View {
 }
 
 private extension View {
-    @ViewBuilder func chatToolbarCapsule() -> some View {
+    @ViewBuilder func chatToolbarCapsule(animationToken: String) -> some View {
         if #available(iOS 26.0, *) {
             self
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .glassEffect(.regular, in: Capsule())
+                .animation(.spring(response: 0.32, dampingFraction: 0.8), value: animationToken)
         } else {
             self
         }
@@ -607,7 +629,7 @@ private struct MessageBubble: View {
             } else {
                 HStack(alignment: .bottom, spacing: 6) {
                     if message.isOutgoing { Spacer(minLength: 48) }
-                    if !message.isOutgoing && isChat && !isStickerMessage {
+                    if !message.isOutgoing && isChat {
                         if showsSenderDetails {
                             Button {
                                 onProfileTap(sender)
