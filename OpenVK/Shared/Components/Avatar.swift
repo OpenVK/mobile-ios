@@ -10,6 +10,7 @@ struct Avatar: View {
     var size: CGFloat = 42
     var refreshOnAppear = false
     var refreshToken: UUID?
+    var placeholderImageName: String?
 
     var body: some View {
         ZStack {
@@ -28,14 +29,24 @@ struct Avatar: View {
                     .clipShape(Circle())
             } else {
                 placeholder
+                    .frame(width: size, height: size)
+                    .clipShape(Circle())
             }
         }
     }
 
     private var placeholder: some View {
-        Image(systemName: "person.fill")
-            .font(.system(size: size * 0.5))
-            .foregroundColor(Color(.secondaryLabel))
+        Group {
+            if let placeholderImageName {
+                Image(placeholderImageName)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "person.fill")
+                    .font(.system(size: size * 0.5))
+                    .foregroundColor(Color(.secondaryLabel))
+            }
+        }
     }
 }
 

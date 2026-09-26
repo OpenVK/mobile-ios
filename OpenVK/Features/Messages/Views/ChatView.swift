@@ -85,7 +85,11 @@ struct ChatView: View {
 
     private var chatTitle: some View {
         HStack(spacing: 8) {
-            Avatar(user: conversation.peer, size: 28)
+            Avatar(
+                user: conversation.peer,
+                size: 28,
+                placeholderImageName: conversation.isChat ? "chat_default_100" : nil
+            )
             VStack(alignment: .leading, spacing: 1) {
                 Text(conversation.peer.displayName)
                     .font(.system(size: 16, weight: .semibold))

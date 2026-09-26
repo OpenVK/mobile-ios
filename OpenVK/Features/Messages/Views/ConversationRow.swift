@@ -102,7 +102,11 @@ struct ConversationRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack(alignment: .bottomTrailing) {
-                Avatar(user: conversation.peer, size: 48)
+                Avatar(
+                    user: conversation.peer,
+                    size: 48,
+                    placeholderImageName: conversation.isChat ? "chat_default_100" : nil
+                )
 
                 if conversation.peer.isOnline && !conversation.isChat {
                     Circle()
