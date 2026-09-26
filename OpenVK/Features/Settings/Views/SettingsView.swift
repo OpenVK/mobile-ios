@@ -1,5 +1,6 @@
 import SwiftUI
 import LocalAuthentication
+import PhotosUI
 
 struct SettingsView: View {
     @Environment(\.presentationMode) var presentationMode
@@ -934,6 +935,14 @@ struct AppearanceSettingsView: View {
                     }
                 }
             }
+
+            if #available(iOS 16.0, *) {
+                Section(header: Text("Чаты")) {
+                    NavigationLink(destination: ChatAppearanceSettingsView()) {
+                        SettingsRow(icon: "message.fill", title: "Оформление чата", iconColor: .appAccent)
+                    }
+                }
+            }
         }
         .listStyle(InsetGroupedListStyle())
         .navigationTitle("Внешний вид")
@@ -942,6 +951,114 @@ struct AppearanceSettingsView: View {
 
     private func colorCircle(for colorName: String) -> Color {
         appAccentColor(for: colorName)
+    }
+}
+
+@available(iOS 16.0, *)
+struct ChatAppearanceSettingsView: View {
+    @AppStorage("openvk.chat_wallpaper_color") private var selectedColor = "Системный"
+    @AppStorage("openvk.chat_wallpaper_image") private var wallpaperData = Data()
+    @AppStorage("openvk.chat_wallpaper_blur") private var isBlurred = false
+    @State private var selectedPhoto: PhotosPickerItem?
+
+    private let colors = ["Системный", "Голубой", "Фиолетовый", "Розовый", "Зелёный", "Оранжевый", "Графит"]
+
+    var body: some View {
+        List {
+            Section {
+                ChatWallpaperBackground()
+                    .frame(height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            }
+
+            Section("Обои") {
+                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                    Label("Выбрать фотографию", systemImage: "photo.on.rectangle")
+                }
+
+                if !wallpaperData.isEmpty {
+                    Button(role: .destructive) {
+                        wallpaperData = Data()
+                    } label: {
+                        Label("Удалить фотографию", systemImage: "trash")
+                    }
+                }
+
+                Toggle("Размытие", isOn: $isBlurred)
+                    .disabled(wallpaperData.isEmpty)
+            }
+
+            Section("Цвет") {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 14) {
+                    ForEach(colors, id: \.self) { color in
+                        Button {
+                            selectedColor = color
+                            wallpaperData = Data()
+                        } label: {
+                            VStack(spacing: 6) {
+                                Circle()
+                                    .fill(ChatWallpaperBackground.color(for: color))
+                                    .frame(width: 40, height: 40)
+                                    .overlay {
+                                        if selectedColor == color && wallpaperData.isEmpty {
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 15, weight: .bold))
+                                                .foregroundStyle(.white)
+                                        }
+                                    }
+                                Text(color).font(.caption2).lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+        .navigationTitle("Оформление чата")
+        .customBackButton(title: "Внешний вид")
+        .onChange(of: selectedPhoto) { item in
+            Task {
+                guard let data = try? await item?.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data),
+                      let compressedData = image.jpegData(compressionQuality: 0.8) else { return }
+                wallpaperData = compressedData
+            }
+        }
+    }
+}
+
+struct ChatWallpaperBackground: View {
+    @AppStorage("openvk.chat_wallpaper_color") private var selectedColor = "Системный"
+    @AppStorage("openvk.chat_wallpaper_image") private var wallpaperData = Data()
+    @AppStorage("openvk.chat_wallpaper_blur") private var isBlurred = false
+
+    var body: some View {
+        ZStack {
+            Self.color(for: selectedColor)
+            if let image = UIImage(data: wallpaperData) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: isBlurred ? 18 : 0)
+                    .scaleEffect(isBlurred ? 1.08 : 1)
+                    .overlay(Color.black.opacity(isBlurred ? 0.12 : 0))
+            }
+        }
+        .clipped()
+    }
+
+    static func color(for name: String) -> Color {
+        switch name {
+        case "Голубой": return Color(red: 0.72, green: 0.88, blue: 1)
+        case "Фиолетовый": return Color(red: 0.82, green: 0.75, blue: 1)
+        case "Розовый": return Color(red: 1, green: 0.78, blue: 0.86)
+        case "Зелёный": return Color(red: 0.74, green: 0.93, blue: 0.79)
+        case "Оранжевый": return Color(red: 1, green: 0.85, blue: 0.68)
+        case "Графит": return Color(red: 0.25, green: 0.27, blue: 0.31)
+        default: return Color(.systemBackground)
+        }
     }
 }
 

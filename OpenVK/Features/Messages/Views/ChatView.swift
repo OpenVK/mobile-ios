@@ -57,23 +57,30 @@ struct ChatView: View {
                     }
                 }
         }
-        .background(Color.white)
+        .background {
+            ChatWallpaperBackground()
+                .ignoresSafeArea()
+        }
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { composerHeight = $0 }
         .onChange(of: text) { viewModel.sendTyping(for: $0) }
         .navigationBarTitleDisplayMode(.inline)
+        .chatNavigationBarTransparent()
         .chatTabBarHidden()
         .toolbar {
             ToolbarItem(placement: .principal) {
-                if conversation.isChat {
-                    chatTitle
-                } else {
-                    Button {
-                        profileToShow = conversation.peer
-                    } label: {
+                Group {
+                    if conversation.isChat {
                         chatTitle
+                    } else {
+                        Button {
+                            profileToShow = conversation.peer
+                        } label: {
+                            chatTitle
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .chatToolbarCapsule()
             }
         }
         .task {
@@ -525,6 +532,25 @@ private struct StickerPickerPanel: View {
 }
 
 private extension View {
+    @ViewBuilder func chatToolbarCapsule() -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: Capsule())
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder func chatNavigationBarTransparent() -> some View {
+        if #available(iOS 16.0, *) {
+            self.toolbarBackground(.hidden, for: .navigationBar)
+        } else {
+            self
+        }
+    }
+
     @ViewBuilder func chatTabBarHidden() -> some View {
         if #available(iOS 16.0, *) {
             self.toolbar(.hidden, for: .tabBar)
