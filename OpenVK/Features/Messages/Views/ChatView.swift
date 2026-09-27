@@ -66,6 +66,16 @@ struct ChatView: View {
         }
         .onPreferenceChange(ComposerHeightPreferenceKey.self) { composerHeight = $0 }
         .onChange(of: text) { viewModel.sendTyping(for: $0) }
+        .onAppear {
+            if #unavailable(iOS 16.0) {
+                LegacyChatTabBarHider.setTabBarHidden(true)
+            }
+        }
+        .onDisappear {
+            if #unavailable(iOS 16.0) {
+                LegacyChatTabBarHider.setTabBarHidden(false)
+            }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .chatNavigationBarTransparent()
         .chatTabBarHidden()
@@ -680,7 +690,75 @@ private extension View {
         if #available(iOS 16.0, *) {
             self.toolbar(.hidden, for: .tabBar)
         } else {
-            self
+            self.background(LegacyChatTabBarHider())
+        }
+    }
+}
+
+private struct LegacyChatTabBarHider: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ uiViewController: Controller, context: Context) {
+        uiViewController.setTabBarHidden(true)
+    }
+
+    static func dismantleUIViewController(_ uiViewController: Controller, coordinator: ()) {
+        uiViewController.setTabBarHidden(false)
+    }
+
+    static func setTabBarHidden(_ hidden: Bool) {
+        DispatchQueue.main.async {
+            let windows = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+            for window in windows {
+                guard let controller = window.rootViewController,
+                      let tabBarController = findTabBarController(in: controller) else { continue }
+                tabBarController.tabBar.isHidden = hidden
+            }
+        }
+    }
+
+    private static func findTabBarController(in controller: UIViewController) -> UITabBarController? {
+        if let tabBarController = controller as? UITabBarController {
+            return tabBarController
+        }
+        for child in controller.children {
+            if let tabBarController = findTabBarController(in: child) {
+                return tabBarController
+            }
+        }
+        if let presented = controller.presentedViewController {
+            return findTabBarController(in: presented)
+        }
+        return nil
+    }
+
+    final class Controller: UIViewController {
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            setTabBarHidden(parent != nil)
+        }
+
+        override func viewDidDisappear(_ animated: Bool) {
+            super.viewDidDisappear(animated)
+            setTabBarHidden(false)
+        }
+
+        func setTabBarHidden(_ hidden: Bool) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                var current: UIViewController? = self
+                while let controller = current {
+                    if let tabBarController = controller.tabBarController {
+                        tabBarController.tabBar.isHidden = hidden
+                        return
+                    }
+                    current = controller.parent
+                }
+            }
         }
     }
 }
