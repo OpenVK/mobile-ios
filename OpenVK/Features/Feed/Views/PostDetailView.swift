@@ -308,6 +308,7 @@ struct CommentTextView: UIViewRepresentable {
     @Binding var text: String
     let placeholder: String
     @Binding var height: CGFloat
+    var onBeginEditing: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> UITextView {
         let tv = BoundedTextView()
@@ -339,6 +340,7 @@ struct CommentTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
+        context.coordinator.onBeginEditing = onBeginEditing
         if uiView.text != text {
             uiView.text = text
         }
@@ -358,17 +360,19 @@ struct CommentTextView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, height: $height)
+        Coordinator(text: $text, height: $height, onBeginEditing: onBeginEditing)
     }
 
     class Coordinator: NSObject, UITextViewDelegate {
         @Binding var text: String
         @Binding var height: CGFloat
         var placeholderLabel: UILabel?
+        var onBeginEditing: (() -> Void)?
 
-        init(text: Binding<String>, height: Binding<CGFloat>) {
+        init(text: Binding<String>, height: Binding<CGFloat>, onBeginEditing: (() -> Void)?) {
             self._text = text
             self._height = height
+            self.onBeginEditing = onBeginEditing
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -382,6 +386,10 @@ struct CommentTextView: UIViewRepresentable {
                 height = min(newHeight, maxHeight)
             }
             textView.isScrollEnabled = newHeight > maxHeight
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            onBeginEditing?()
         }
     }
 }

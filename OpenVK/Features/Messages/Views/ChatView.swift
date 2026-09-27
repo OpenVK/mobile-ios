@@ -507,14 +507,69 @@ struct ChatView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .animation(.spring(response: 0.28, dampingFraction: 0.78), value: hasMessageText)
+
+            if isEmojiPanelPresented {
+                StickerPickerPanel(
+                    packs: viewModel.stickerPacks,
+                    recentStickers: recentStickers,
+                    isLoading: viewModel.isLoadingStickerPacks,
+                    onStickerSelected: sendSticker
+                )
+                .frame(height: 280)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .background(.bar)
         .ignoresSafeArea(.container, edges: .bottom)
+        .animation(.easeInOut(duration: 0.15), value: isEmojiPanelPresented)
     }
 
     private var legacyMessageInput: some View {
-        CommentTextView(text: $text, placeholder: "Сообщение", height: $legacyTextHeight)
-            .frame(height: min(legacyTextHeight, 120))
+        ZStack(alignment: .trailing) {
+            CommentTextView(
+                text: $text,
+                placeholder: "Сообщение",
+                height: $legacyTextHeight,
+                onBeginEditing: closeLegacyStickerPicker
+            )
+                .padding(.trailing, 38)
+                .frame(height: min(legacyTextHeight, 120))
+
+            Button(action: toggleLegacyStickerPicker) {
+                Image(systemName: isEmojiPanelPresented ? "keyboard" : "face.smiling")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Стикеры")
+        }
+    }
+
+    private func toggleLegacyStickerPicker() {
+        endEditing()
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEmojiPanelPresented.toggle()
+        }
+        if isEmojiPanelPresented {
+            viewModel.loadStickerPacks()
+        }
+    }
+
+    private func closeLegacyStickerPicker() {
+        guard isEmojiPanelPresented else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isEmojiPanelPresented = false
+        }
+    }
+
+    private func endEditing() {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .forEach { $0.endEditing(true) }
     }
 
     private func sendLegacyMessage() {
@@ -595,7 +650,6 @@ private struct ChatMessageFramePreferenceKey: PreferenceKey {
     }
 }
 
-@available(iOS 26.0, *)
 private struct StickerPickerPanel: View {
     let packs: [VKStickerPack]
     let recentStickers: [VKSticker]
@@ -616,9 +670,7 @@ private struct StickerPickerPanel: View {
                 content
             }
         }
-        .background(Color(.secondarySystemBackground).opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .chatStickerPickerSurface()
     }
 
     private func packTabs(onSelect: @escaping (String) -> Void) -> some View {
@@ -659,7 +711,18 @@ private struct StickerPickerPanel: View {
         if isLoading && packs.isEmpty {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if packs.isEmpty && recentStickers.isEmpty {
-            ContentUnavailableView("Нет стикерпаков", systemImage: "face.smiling", description: Text("Установленные стикерпаки появятся здесь."))
+            VStack(spacing: 8) {
+                Image(systemName: "face.smiling")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
+                Text("Нет стикерпаков")
+                    .font(.subheadline.weight(.semibold))
+                Text("Установленные стикерпаки появятся здесь.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -720,6 +783,19 @@ private struct StickerPickerArtwork: View {
 }
 
 private extension View {
+    @ViewBuilder func chatStickerPickerSurface() -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .background(Color(.secondarySystemBackground).opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        } else {
+            self
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
     @ViewBuilder func chatJumpButtonGlass() -> some View {
         if #available(iOS 26.0, *) {
             self.glassEffect(.regular, in: Circle())
