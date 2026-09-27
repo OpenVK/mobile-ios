@@ -803,6 +803,33 @@ struct VKDocAttachment: Decodable {
     let ext: String?
     let size: Int?
     let url: String?
+    let isGif: Int?
+    let preview: VKDocPreview?
+
+    private enum CodingKeys: String, CodingKey {
+        case title, ext, size, url, preview
+        case isGif = "is_gif"
+        case isGifCamel = "isGif"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try? container.decode(String.self, forKey: .title)
+        ext = try? container.decode(String.self, forKey: .ext)
+        size = try? container.decode(Int.self, forKey: .size)
+        url = try? container.decode(String.self, forKey: .url)
+        preview = try? container.decode(VKDocPreview.self, forKey: .preview)
+        isGif = (try? container.decode(Int.self, forKey: .isGif))
+            ?? (try? container.decode(Int.self, forKey: .isGifCamel))
+    }
+}
+
+struct VKDocPreview: Decodable {
+    let photo: VKDocPreviewPhoto?
+}
+
+struct VKDocPreviewPhoto: Decodable {
+    let sizes: [VKPhotoSize]?
 }
 
 struct VKAudioAttachment: Decodable {

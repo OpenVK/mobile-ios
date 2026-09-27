@@ -2457,9 +2457,15 @@ import WebKit
 
 struct GIFView: UIViewRepresentable {
     let urlString: String
+    var onLoad: () -> Void = {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onLoad: onLoad)
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView()
+        webView.navigationDelegate = context.coordinator
         webView.scrollView.isScrollEnabled = false
         webView.isUserInteractionEnabled = false
         webView.backgroundColor = .clear
@@ -2470,6 +2476,9 @@ struct GIFView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
+        context.coordinator.onLoad = onLoad
+        guard context.coordinator.loadedURL != urlString else { return }
+        context.coordinator.loadedURL = urlString
         let html = """
         <html>
         <head>
@@ -2486,9 +2495,9 @@ struct GIFView: UIViewRepresentable {
                     overflow: hidden;
                 }
                 img {
-                    max-width: 100%;
-                    max-height: 100%;
-                    object-fit: cover;
+                    width: 100%;
+                    height: 100%;
+                    object-fit: contain;
                     border-radius: 12px;
                 }
             </style>
@@ -2499,6 +2508,19 @@ struct GIFView: UIViewRepresentable {
         </html>
         """
         uiView.loadHTMLString(html, baseURL: nil)
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var onLoad: () -> Void
+        var loadedURL: String?
+
+        init(onLoad: @escaping () -> Void) {
+            self.onLoad = onLoad
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            onLoad()
+        }
     }
 }
 

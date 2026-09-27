@@ -4,6 +4,7 @@ import SwiftUI
 enum ChatScrollRequest: Equatable {
     case initial(messageID: Int?)
     case preservePosition(messageID: Int)
+    case message(messageID: Int)
     case bottom(animated: Bool)
 }
 
@@ -26,6 +27,8 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var canSendMessages: Bool
     @Published private(set) var scrollRequest: ChatScrollRequest = .initial(messageID: nil)
     @Published private(set) var scrollRequestID = 0
+    @Published private(set) var isNearBottom = true
+    @Published private(set) var unreadMessageCount: Int
 
     let conversation: Conversation
     private let service: MessagesService
@@ -40,7 +43,6 @@ final class ChatViewModel: ObservableObject {
     private var didLoadMessages = false
     private var lastRememberedMessageID: Int?
     private var newestHistoryOffset = 0
-    private var isNearBottom = true
 
     private var positionStorageKey: String {
         let host = AppConfig.currentHost
@@ -54,6 +56,7 @@ final class ChatViewModel: ObservableObject {
         isPeerOnline = conversation.peer.isOnline
         peerLastSeen = nil
         canSendMessages = !conversation.isChat || conversation.isChatMember
+        unreadMessageCount = conversation.unreadCount
     }
 
     deinit {
@@ -65,7 +68,7 @@ final class ChatViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         let savedPosition = didLoadMessages ? nil : self.savedPosition()
-        let initialOffset = max(0, (savedPosition?.historyOffset ?? 0) - pageSize / 2)
+        let initialOffset = max(0, (savedPosition?.historyOffset ?? 0) - pageSize + 1)
         if !didLoadMessages,
            let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize) {
             applyCachedPage(cachedPage, initialOffset: initialOffset, savedMessageID: savedPosition?.messageID)
@@ -225,7 +228,17 @@ final class ChatViewModel: ObservableObject {
     }
 
     func scrollToBottom(animated: Bool = false) {
+        unreadMessageCount = 0
         requestScroll(.bottom(animated: animated))
+    }
+
+    func clearUnreadMessages() {
+        unreadMessageCount = 0
+    }
+
+    func scrollTo(messageID: Int) {
+        guard messages.contains(where: { $0.id == messageID }) else { return }
+        requestScroll(.message(messageID: messageID))
     }
 
     var peerPresenceText: String? {

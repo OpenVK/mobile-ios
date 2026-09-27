@@ -97,6 +97,7 @@ struct VKConversationAttachment: Decodable {
     let sticker: VKSticker?
     let photo: VKMessagePhoto?
     let video: VKVideoAttachment?
+    let doc: VKDocAttachment?
 }
 
 struct VKMessagePhoto: Decodable {
@@ -168,6 +169,44 @@ struct ChatVideo: Identifiable, Hashable, Codable {
     var durationText: String {
         let minutes = duration / 60
         return String(format: "%d:%02d", minutes, duration % 60)
+    }
+}
+
+struct ChatDocument: Identifiable, Hashable, Codable {
+    let id: String
+    let title: String
+    let ext: String
+    let size: Int
+    let url: String
+    let isGIF: Bool
+    let aspectRatio: Double
+
+    init?(attachment: VKDocAttachment) {
+        guard let url = attachment.url, !url.isEmpty else { return nil }
+        self.url = url
+        title = attachment.title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? attachment.title!
+            : "Документ"
+        ext = attachment.ext?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        size = attachment.size ?? 0
+        isGIF = attachment.isGif == 1 || ext.lowercased() == "gif"
+        let previewSize = attachment.preview?.photo?.sizes?.last(where: {
+            ($0.width ?? 0) > 0 && ($0.height ?? 0) > 0
+        })
+        if let width = previewSize?.width, let height = previewSize?.height, height > 0 {
+            aspectRatio = Double(width) / Double(height)
+        } else {
+            aspectRatio = 1
+        }
+        id = "\(url)|\(title)"
+    }
+
+    var formattedSize: String {
+        guard size > 0 else { return "" }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(size))
     }
 }
 
@@ -344,6 +383,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let stickerAnimationURL: URL?
     let photos: [ChatPhoto]
     let videos: [ChatVideo]
+    let documents: [ChatDocument]
+    let gifs: [ChatDocument]
     let reply: ChatReply?
     let systemEventText: String?
     let isDeleted: Bool
@@ -358,7 +399,10 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         let attachments = message.attachments ?? []
         let photos = attachments.compactMap { $0.photo?.chatPhoto }
         let videos = attachments.compactMap { $0.video.map(ChatVideo.init) }
-        text = body.isEmpty && (!photos.isEmpty || !videos.isEmpty)
+        let documents = attachments.compactMap { $0.doc.flatMap(ChatDocument.init) }
+        let gifs = documents.filter(\.isGIF)
+        let regularDocuments = documents.filter { !$0.isGIF }
+        text = body.isEmpty && (!photos.isEmpty || !videos.isEmpty || !documents.isEmpty)
             ? ""
             : (body.isEmpty ? attachments.map { Self.attachmentTitle($0.type) }.joined(separator: " ") : body)
         date = Date(timeIntervalSince1970: TimeInterval(message.date ?? 0))
@@ -374,6 +418,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         attachmentTypes = attachments.compactMap(\.type)
         self.photos = photos
         self.videos = videos
+        self.documents = regularDocuments
+        self.gifs = gifs
         reply = message.replyMessage.map { replyMessage in
             let replySenderID = replyMessage.fromId ?? 0
             let profile = profiles.first(where: { $0.id == abs(replySenderID) })
@@ -421,6 +467,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         stickerAnimationURL: URL?,
         photos: [ChatPhoto],
         videos: [ChatVideo],
+        documents: [ChatDocument],
+        gifs: [ChatDocument],
         reply: ChatReply? = nil,
         systemEventText: String?,
         isDeleted: Bool,
@@ -440,6 +488,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.stickerAnimationURL = stickerAnimationURL
         self.photos = photos
         self.videos = videos
+        self.documents = documents
+        self.gifs = gifs
         self.reply = reply
         self.systemEventText = systemEventText
         self.isDeleted = isDeleted
@@ -462,6 +512,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerAnimationURL: nil,
             photos: [],
             videos: [],
+            documents: [],
+            gifs: [],
             reply: replyTo.map {
                 ChatReply(
                     messageID: $0.id,
@@ -490,6 +542,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerAnimationURL: sticker.animationURL,
             photos: [],
             videos: [],
+            documents: [],
+            gifs: [],
             reply: nil,
             systemEventText: nil,
             isDeleted: false,
@@ -512,6 +566,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerAnimationURL: stickerAnimationURL,
             photos: photos,
             videos: videos,
+            documents: documents,
+            gifs: gifs,
             reply: reply,
             systemEventText: systemEventText,
             isDeleted: isDeleted,
@@ -524,7 +580,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         ChatMessage(
             id: id, text: value, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
-            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos, reply: reply,
+            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
+            documents: documents, gifs: gifs, reply: reply,
             systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus
         )
     }
@@ -533,7 +590,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         ChatMessage(
             id: id, text: text, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
-            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos, reply: reply,
+            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
+            documents: documents, gifs: gifs, reply: reply,
             systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus
         )
     }

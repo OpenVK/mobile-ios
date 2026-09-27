@@ -94,7 +94,11 @@ struct RepostView: View {
 
     @Environment(\.presentationMode) private var presentationMode
 
-    @State private var mode: RepostMode = .myWall
+    @State private var mode: RepostMode = .chat
+
+    @State private var conversations: [Conversation] = []
+    @State private var isLoadingConversations = false
+    @State private var conversationsErrorMessage: String? = nil
 
     @State private var groups: [RepostGroup] = []
     @State private var isLoadingGroups = false
@@ -156,6 +160,7 @@ struct RepostView: View {
         .modifier(HalfSheet(compact: mode == .myWall, fixed: mode == .myWall))
         .onAppear {
             loadAdminGroups()
+            loadConversations()
         }
     }
 
@@ -163,12 +168,70 @@ struct RepostView: View {
     private var contentArea: some View {
         switch mode {
         case .chat:
-            UnderDevelopmentView(section: "Отправка друзьям")
+            recipientsArea
         case .myWall:
             EmptyView()
         case .group:
             groupArea
         }
+    }
+
+    private var recipientsArea: some View {
+        VStack(spacing: 0) {
+            if isLoadingConversations {
+                Spacer()
+                ProgressView()
+                Spacer()
+            } else if let error = conversationsErrorMessage {
+                Spacer()
+                Text(error)
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                Spacer()
+            } else if conversations.isEmpty {
+                Spacer()
+                Text("Нет диалогов для отправки")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+                Spacer()
+            } else {
+                List(conversations) { conversation in
+                    recipientRow(conversation)
+                }
+                .listStyle(PlainListStyle())
+            }
+        }
+    }
+
+    private func recipientRow(_ conversation: Conversation) -> some View {
+        HStack(spacing: 12) {
+            Avatar(
+                user: conversation.peer,
+                size: 44,
+                placeholderImageName: conversation.isChat ? "chat_default_100" : nil
+            )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conversation.peer.displayName)
+                    .font(.system(size: 15))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Text(conversation.isChat ? "Беседа" : "Личное сообщение")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            sendRowButton(
+                isSent: sentPeerIDs.contains(conversation.id),
+                isSending: sendingPeerID == conversation.id,
+                action: { sendToConversation(conversation) }
+            )
+        }
+        .padding(.vertical, 2)
     }
     private func sendRowButton(isSent: Bool,
                                isSending: Bool,
@@ -361,19 +424,20 @@ struct RepostView: View {
 
     private var actionRow: some View {
         HStack(spacing: 0) {
+            shareAction(icon: "paperplane.fill",
+                        title: "В сообщении",
+                        isSelected: mode == .chat) {
+                withAnimation { mode = .chat }
+            }
             shareAction(icon: "person.fill",
                         title: "На своей странице",
                         isSelected: mode == .myWall) {
-                withAnimation {
-                    mode = mode == .myWall ? .chat : .myWall
-                }
+                withAnimation { mode = .myWall }
             }
             shareAction(icon: "person.2.fill",
                         title: "На стене группы",
                         isSelected: mode == .group) {
-                withAnimation {
-                    mode = mode == .group ? .chat : .group
-                }
+                withAnimation { mode = .group }
             }
             shareAction(icon: "link",
                         title: "Скопировать ссылку",
@@ -445,6 +509,24 @@ struct RepostView: View {
         }
     }
 
+    private func loadConversations() {
+        guard conversations.isEmpty, !isLoadingConversations else { return }
+        isLoadingConversations = true
+        conversationsErrorMessage = nil
+
+        MessagesService.shared.fetchConversations(offset: 0, count: 100) { result in
+            DispatchQueue.main.async {
+                isLoadingConversations = false
+                switch result {
+                case .success(let page):
+                    conversations = page.conversations
+                case .failure:
+                    conversationsErrorMessage = "Не удалось загрузить список диалогов"
+                }
+            }
+        }
+    }
+
     private func publishToWall() {
         guard !isSendingWall else { return }
         isSendingWall = true
@@ -489,6 +571,36 @@ struct RepostView: View {
             case .failure(let error):
                 errorMessage = error.localizedDescription
                 showError = true
+            }
+        }
+    }
+
+    private func sendToConversation(_ conversation: Conversation) {
+        guard sendingPeerID == nil else { return }
+        sendingPeerID = conversation.id
+        errorMessage = nil
+
+        APIClient.shared.call(
+            method: "messages.send",
+            parameters: [
+                "peer_id": String(conversation.id),
+                "message": comment,
+                "attachment": repostObject,
+                "random_id": String(Int.random(in: 1...Int.max))
+            ],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            DispatchQueue.main.async {
+                sendingPeerID = nil
+                switch result {
+                case .success:
+                    HapticManager.impact(.medium)
+                    sentPeerIDs.insert(conversation.id)
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                    showError = true
+                }
             }
         }
     }

@@ -15,6 +15,7 @@ struct ChatView: View {
     @State private var replyToMessage: ChatMessage?
     @State private var editingMessage: ChatMessage?
     @State private var messageToDelete: ChatMessage?
+    @State private var isAttachmentUnavailableAlertPresented = false
     @FocusState private var isComposerFocused: Bool
     @Binding var selectedMedia: Attachment?
     @Binding var owningPost: Post?
@@ -93,6 +94,11 @@ struct ChatView: View {
         .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
+        .alert("В разработке", isPresented: $isAttachmentUnavailableAlertPresented) {
+            Button("ОК", role: .cancel) {}
+        } message: {
+            Text("Загрузка вложений находится в разработке и будет доступна в следующих версиях.")
+        }
         .confirmationDialog("Удалить сообщение?", isPresented: Binding(
             get: { messageToDelete != nil },
             set: { if !$0 { messageToDelete = nil } }
@@ -189,6 +195,8 @@ struct ChatView: View {
                             replyToMessage = message
                             editingMessage = nil
                             isComposerFocused = true
+                        } onReplyTap: { reply in
+                            viewModel.scrollTo(messageID: reply.messageID)
                         } onEdit: { message in
                             editingMessage = message
                             replyToMessage = nil
@@ -215,6 +223,42 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if !viewModel.isNearBottom {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                        }
+                        viewModel.clearUnreadMessages()
+                    } label: {
+                        ZStack {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 17, weight: .bold))
+                            if viewModel.unreadMessageCount > 0 {
+                                Text("\(viewModel.unreadMessageCount)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(4)
+                                    .background(Color.appAccent, in: Circle())
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                                    .offset(x: 7, y: -7)
+                            }
+                        }
+                        .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .chatJumpButtonGlass()
+                    .contentShape(Circle())
+                    .zIndex(1)
+                    .accessibilityLabel(
+                        viewModel.unreadMessageCount > 0
+                            ? "К непрочитанным сообщениям: \(viewModel.unreadMessageCount)"
+                            : "К последним сообщениям"
+                    )
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 12)
+                }
             }
             .coordinateSpace(name: "chat-history")
             .onPreferenceChange(ChatMessageFramePreferenceKey.self) { frames in
@@ -245,6 +289,8 @@ struct ChatView: View {
                         }
                     case .preservePosition(let messageID):
                         proxy.scrollTo(messageID, anchor: .top)
+                    case .message(let messageID):
+                        proxy.scrollTo(messageID, anchor: .center)
                     case .bottom(let animated):
                         if animated {
                             withAnimation(.easeOut(duration: 0.2)) {
@@ -338,7 +384,7 @@ struct ChatView: View {
     @available(iOS 26.0, *)
     private func composerControls(maximumLines: Int) -> some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button {} label: {
+            Button { isAttachmentUnavailableAlertPresented = true } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: 25, height: 25)
@@ -566,7 +612,8 @@ private struct StickerPickerPanel: View {
             LazyVGrid(columns: grid, spacing: 6) {
                 ForEach(stickers, id: \.identifier) { sticker in
                     Button { onStickerSelected(sticker) } label: {
-                        StickerPickerArtwork(sticker: sticker).frame(width: 62, height: 62)
+                        StickerPickerArtwork(sticker: sticker)
+                            .frame(width: 62, height: 62)
                     }
                     .buttonStyle(.plain)
                 }
@@ -590,27 +637,25 @@ private struct StickerPickerPanel: View {
 
 private struct StickerPickerArtwork: View {
     let sticker: VKSticker
-    @State private var animationIsLoaded = false
 
     var body: some View {
-        ZStack {
-            if let url = sticker.thumbnailURL {
-                CachedRemoteImage(url: url, contentMode: .fit) { ProgressView() }
-                    .opacity(sticker.animationURL == nil || !animationIsLoaded ? 1 : 0)
-            } else {
-                Image(systemName: "face.smiling").foregroundStyle(.secondary)
-            }
-
-            if let animationURL = sticker.animationURL {
-                AnimatedStickerView(animationURL: animationURL) {
-                    animationIsLoaded = true
-                }
-            }
+        if let url = sticker.thumbnailURL {
+            CachedRemoteImage(url: url, contentMode: .fit) { ProgressView() }
+        } else {
+            Image(systemName: "face.smiling").foregroundStyle(.secondary)
         }
     }
 }
 
 private extension View {
+    @ViewBuilder func chatJumpButtonGlass() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: Circle())
+        } else {
+            self.background(.thinMaterial, in: Circle())
+        }
+    }
+
     @ViewBuilder func chatToolbarCapsule(animationToken: String) -> some View {
         if #available(iOS 26.0, *) {
             self
@@ -748,6 +793,7 @@ private struct MessageBubble: View {
     let onProfileTap: (User) -> Void
     let onMentionTap: (String) -> Void
     let onReply: (ChatMessage) -> Void
+    let onReplyTap: (ChatReply) -> Void
     let onEdit: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
     @State private var swipeOffset: CGFloat = 0
@@ -843,9 +889,71 @@ private struct MessageBubble: View {
             videoBubble(video)
         } else if !message.photos.isEmpty {
             photoBubble
+        } else if let gif = message.gifs.first {
+            gifBubble(gif)
+        } else if !message.documents.isEmpty {
+            filesBubble
         } else {
             bubble
         }
+    }
+
+    private var filesBubble: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            if isChat, !message.isOutgoing, showsSenderDetails, let senderName = message.senderName {
+                Button { onProfileTap(sender) } label: {
+                    Text(senderName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.appAccent)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let reply = message.reply {
+                Button { onReplyTap(reply) } label: {
+                    replyPreview(reply, width: photoBubbleWidth - 26)
+                }
+                .buttonStyle(.plain)
+            }
+
+            ForEach(message.documents) { document in
+                ChatDocumentAttachmentCard(document: document)
+            }
+
+            if !message.text.isEmpty {
+                messageTextAndMetadata
+            } else {
+                HStack {
+                    Spacer()
+                    messageMetadata
+                }
+            }
+        }
+        .foregroundStyle(message.isOutgoing ? .white : .primary)
+        .padding(13)
+        .frame(width: photoBubbleWidth, alignment: .leading)
+        .background(attachmentBubbleColor, in: attachmentBubbleShape)
+    }
+
+    private func gifBubble(_ gif: ChatDocument) -> some View {
+        let size = gifBubbleSize(for: gif)
+        return ZStack(alignment: .bottomTrailing) {
+            ChatGIFArtwork(url: gif.url)
+                .frame(width: size.width, height: size.height)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .accessibilityLabel("Анимированное изображение: \(gif.title)")
+
+            imageMetadata
+                .padding(6)
+        }
+    }
+
+    private func gifBubbleSize(for gif: ChatDocument) -> CGSize {
+        let maximumWidth = photoBubbleWidth
+        let maximumHeight: CGFloat = 300
+        let aspectRatio = max(CGFloat(gif.aspectRatio), 0.1)
+        let width = min(maximumWidth, maximumHeight * aspectRatio)
+        return CGSize(width: width, height: width / aspectRatio)
     }
 
     private var photoBubble: some View {
@@ -984,7 +1092,12 @@ private struct MessageBubble: View {
             }
 
             if let reply = message.reply {
-                replyPreview(reply, width: bubbleContentWidth)
+                Button {
+                    onReplyTap(reply)
+                } label: {
+                    replyPreview(reply, width: bubbleContentWidth)
+                }
+                .buttonStyle(.plain)
             }
 
             messageTextAndMetadata
@@ -1181,6 +1294,85 @@ private struct MessageBubble: View {
     }
 }
 
+private struct ChatDocumentAttachmentCard: View {
+    let document: ChatDocument
+    @State private var isDownloading = false
+
+    var body: some View {
+        Button {
+            DocumentDownloader.downloadAndShare(
+                url: document.url,
+                title: document.title,
+                ext: document.ext,
+                isDownloading: $isDownloading
+            )
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.appAccent.opacity(0.16))
+                    Image(systemName: "doc.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.appAccent)
+                }
+                .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(document.title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        if !document.ext.isEmpty {
+                            Text(document.ext.uppercased())
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(Color.appAccent)
+                        }
+                        if !document.formattedSize.isEmpty {
+                            Text(document.formattedSize)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                Spacer(minLength: 4)
+                if isDownloading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(9)
+            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isDownloading)
+        .accessibilityLabel("Документ \(document.title). Открыть или скачать")
+    }
+}
+
+private struct ChatGIFArtwork: View {
+    let url: String
+    @State private var isLoaded = false
+
+    var body: some View {
+        ZStack {
+            GIFView(urlString: url) {
+                isLoaded = true
+            }
+
+            if !isLoaded {
+                ProgressView()
+                    .controlSize(.large)
+            }
+        }
+    }
+}
+
 private struct StickerArtwork: View {
     let staticURL: URL
     let animationURL: URL?
@@ -1366,11 +1558,11 @@ private struct SystemMessagePlaque: View {
                 .opacity(0.75)
         }
         .font(.footnote)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.white)
         .multilineTextAlignment(.center)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .background(.black.opacity(0.55), in: Capsule())
         .frame(maxWidth: .infinity)
     }
 }
