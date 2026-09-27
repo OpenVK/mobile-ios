@@ -106,22 +106,33 @@ struct VKMessagePhoto: Decodable {
 
     var chatPhoto: ChatPhoto? {
         let preferredTypes = ["w", "z", "y", "x", "r", "q"]
-        let urlString = preferredTypes.compactMap { preferredType in
-            sizes?.first(where: { $0.type == preferredType })?.url
-                ?? sizes?.first(where: { $0.type == preferredType })?.src
-        }.first ?? sizes?.last?.url ?? sizes?.last?.src
+        let preferredSize = preferredTypes.compactMap { preferredType in
+            sizes?.first(where: { $0.type == preferredType })
+        }.first ?? sizes?.last
+        let urlString = preferredSize?.url ?? preferredSize?.src
         guard let urlString, let url = URL(string: urlString) else { return nil }
-        return ChatPhoto(id: id, ownerID: ownerId, url: url)
+        return ChatPhoto(
+            id: id,
+            ownerID: ownerId,
+            url: url,
+            width: preferredSize?.width,
+            height: preferredSize?.height
+        )
     }
 }
 
 struct ChatPhoto: Identifiable, Hashable, Codable {
     let id: String
     let url: URL
+    let aspectRatio: Double
 
-    init(id: Int?, ownerID: Int?, url: URL) {
+    init(id: Int?, ownerID: Int?, url: URL, width: Int? = nil, height: Int? = nil) {
         self.id = "\(ownerID ?? 0)_\(id ?? 0)_\(url.absoluteString)"
         self.url = url
+        self.aspectRatio = {
+            guard let width, let height, height > 0 else { return 1 }
+            return Double(width) / Double(height)
+        }()
     }
 }
 
@@ -265,6 +276,14 @@ struct VKHistoryMessage: Decodable {
     let actionMid: Int?
     let edited: Bool?
     let editedAt: Int?
+    let replyMessage: VKReplyMessage?
+}
+
+struct VKReplyMessage: Decodable {
+    let id: Int?
+    let fromId: Int?
+    let body: String?
+    let text: String?
 }
 
 struct VKMessageAction: Decodable {
@@ -306,6 +325,12 @@ struct MessagesPage {
     let messages: [ChatMessage]
 }
 
+struct ChatReply: Hashable, Codable {
+    let messageID: Int
+    let senderName: String
+    let text: String
+}
+
 struct ChatMessage: Identifiable, Hashable, Codable {
     let id: Int
     let text: String
@@ -319,6 +344,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let stickerAnimationURL: URL?
     let photos: [ChatPhoto]
     let videos: [ChatVideo]
+    let reply: ChatReply?
     let systemEventText: String?
     let isDeleted: Bool
     let isEdited: Bool
@@ -348,6 +374,19 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         attachmentTypes = attachments.compactMap(\.type)
         self.photos = photos
         self.videos = videos
+        reply = message.replyMessage.map { replyMessage in
+            let replySenderID = replyMessage.fromId ?? 0
+            let profile = profiles.first(where: { $0.id == abs(replySenderID) })
+            let name = [profile?.firstName, profile?.lastName]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            return ChatReply(
+                messageID: replyMessage.id ?? 0,
+                senderName: name.isEmpty ? "Пользователь" : name,
+                text: replyMessage.body ?? replyMessage.text ?? "Вложение"
+            )
+        }
         systemEventText = Self.systemEventText(
             action: message.action,
             actionMemberID: message.actionMid,
@@ -382,6 +421,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         stickerAnimationURL: URL?,
         photos: [ChatPhoto],
         videos: [ChatVideo],
+        reply: ChatReply? = nil,
         systemEventText: String?,
         isDeleted: Bool,
         isEdited: Bool = false,
@@ -400,6 +440,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.stickerAnimationURL = stickerAnimationURL
         self.photos = photos
         self.videos = videos
+        self.reply = reply
         self.systemEventText = systemEventText
         self.isDeleted = isDeleted
         self.isEdited = isEdited
@@ -407,7 +448,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.endsChatParticipation = endsChatParticipation
     }
 
-    static func pending(text: String) -> ChatMessage {
+    static func pending(text: String, replyTo: ChatMessage? = nil) -> ChatMessage {
         ChatMessage(
             id: -Int.random(in: 1...Int.max),
             text: text,
@@ -421,6 +462,13 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerAnimationURL: nil,
             photos: [],
             videos: [],
+            reply: replyTo.map {
+                ChatReply(
+                    messageID: $0.id,
+                    senderName: $0.senderName ?? "Пользователь",
+                    text: $0.text.isEmpty ? "Вложение" : $0.text
+                )
+            },
             systemEventText: nil,
             isDeleted: false,
             isEdited: false,
@@ -442,6 +490,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerAnimationURL: sticker.animationURL,
             photos: [],
             videos: [],
+            reply: nil,
             systemEventText: nil,
             isDeleted: false,
             isEdited: false,
@@ -463,6 +512,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerAnimationURL: stickerAnimationURL,
             photos: photos,
             videos: videos,
+            reply: reply,
             systemEventText: systemEventText,
             isDeleted: isDeleted,
             isEdited: isEdited,
@@ -474,7 +524,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         ChatMessage(
             id: id, text: value, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
-            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
+            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos, reply: reply,
             systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus
         )
     }
@@ -483,7 +533,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         ChatMessage(
             id: id, text: text, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
-            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
+            stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos, reply: reply,
             systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus
         )
     }

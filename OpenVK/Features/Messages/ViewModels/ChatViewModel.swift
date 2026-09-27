@@ -128,7 +128,8 @@ final class ChatViewModel: ObservableObject {
         guard canSendMessages else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        let pendingMessage = ChatMessage.pending(text: value)
+        let replyMessage = replyTo.flatMap { id in messages.first(where: { $0.id == id }) }
+        let pendingMessage = ChatMessage.pending(text: value, replyTo: replyMessage)
         messages.append(pendingMessage)
         requestScroll(.bottom(animated: true))
 
@@ -247,6 +248,8 @@ final class ChatViewModel: ObservableObject {
                 guard let self, let type = note.userInfo?["type"] as? Int else { return }
                 if type == 3 {
                     self.handleReadFlagEvent(note)
+                } else if type == 13 {
+                    self.handleDeletedMessageEvent(note)
                 } else if type == 7 {
                     if let peerID = note.userInfo?["peerID"] as? Int, peerID == self.conversation.id {
                         self.load()
@@ -261,6 +264,16 @@ final class ChatViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func handleDeletedMessageEvent(_ note: Notification) {
+        guard let peerID = note.userInfo?["peerID"] as? Int,
+              peerID == conversation.id,
+              let messageID = note.userInfo?["messageID"] as? Int,
+              let index = messages.firstIndex(where: { $0.id == messageID }) else {
+            return
+        }
+        messages[index] = messages[index].markingDeleted()
     }
 
     private func updateTyping(_ note: Notification) {

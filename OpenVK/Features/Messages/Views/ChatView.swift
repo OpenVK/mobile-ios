@@ -518,8 +518,13 @@ private struct StickerPickerPanel: View {
                 }
                 ForEach(packs) { pack in
                     Button { onSelect(sectionID(for: pack)) } label: {
-                        stickerImage(url: pack.coverURL)
-                            .frame(width: 30, height: 30)
+                        if let cover = pack.stickers?.first {
+                            StickerPickerArtwork(sticker: cover)
+                                .frame(width: 30, height: 30)
+                        } else {
+                            stickerImage(url: pack.coverURL)
+                                .frame(width: 30, height: 30)
+                        }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(pack.displayName)
@@ -561,7 +566,7 @@ private struct StickerPickerPanel: View {
             LazyVGrid(columns: grid, spacing: 6) {
                 ForEach(stickers, id: \.identifier) { sticker in
                     Button { onStickerSelected(sticker) } label: {
-                        stickerImage(url: sticker.thumbnailURL).frame(width: 62, height: 62)
+                        StickerPickerArtwork(sticker: sticker).frame(width: 62, height: 62)
                     }
                     .buttonStyle(.plain)
                 }
@@ -579,6 +584,28 @@ private struct StickerPickerPanel: View {
             CachedRemoteImage(url: url, contentMode: .fit) { ProgressView() }
         } else {
             Image(systemName: "face.smiling").foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct StickerPickerArtwork: View {
+    let sticker: VKSticker
+    @State private var animationIsLoaded = false
+
+    var body: some View {
+        ZStack {
+            if let url = sticker.thumbnailURL {
+                CachedRemoteImage(url: url, contentMode: .fit) { ProgressView() }
+                    .opacity(sticker.animationURL == nil || !animationIsLoaded ? 1 : 0)
+            } else {
+                Image(systemName: "face.smiling").foregroundStyle(.secondary)
+            }
+
+            if let animationURL = sticker.animationURL {
+                AnimatedStickerView(animationURL: animationURL) {
+                    animationIsLoaded = true
+                }
+            }
         }
     }
 }
@@ -636,6 +663,14 @@ private struct ComposerHeightPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+private struct BubbleContentWidthPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -716,6 +751,7 @@ private struct MessageBubble: View {
     let onEdit: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
     @State private var swipeOffset: CGFloat = 0
+    @State private var bubbleContentWidth: CGFloat = 0
 
     var body: some View {
         Group {
@@ -725,7 +761,7 @@ private struct MessageBubble: View {
                 HStack(alignment: .bottom, spacing: 6) {
                     if message.isOutgoing { Spacer(minLength: 48) }
                     if !message.isOutgoing && isChat {
-                        if showsSenderDetails {
+                        if !joinsNext {
                             Button {
                                 onProfileTap(sender)
                             } label: {
@@ -837,6 +873,7 @@ private struct MessageBubble: View {
                 }
             }
         }
+        .background(attachmentBubbleColor, in: attachmentBubbleShape)
     }
 
     private func videoBubble(_ video: ChatVideo) -> some View {
@@ -902,6 +939,7 @@ private struct MessageBubble: View {
                 }
             }
         }
+        .background(attachmentBubbleColor, in: attachmentBubbleShape)
         .accessibilityLabel("Видео: \(video.title)")
     }
 
@@ -917,6 +955,21 @@ private struct MessageBubble: View {
         .accessibilityLabel("Стикер, \(message.date.formatted(date: .omitted, time: .shortened))")
     }
 
+    private var attachmentBubbleColor: Color {
+        message.isOutgoing ? Color.appAccent : Color(.secondarySystemBackground)
+    }
+
+    private var attachmentBubbleShape: MessageBubbleShape {
+        MessageBubbleShape(
+            topLeadingRadius: 18,
+            topTrailingRadius: 18,
+            bottomLeadingRadius: 18,
+            bottomTrailingRadius: 18,
+            hasTail: !joinsNext && !message.text.isEmpty,
+            isOutgoing: message.isOutgoing
+        )
+    }
+
     private var bubble: some View {
         VStack(alignment: .leading, spacing: 3) {
             if isChat, !message.isOutgoing, showsSenderDetails, let senderName = message.senderName {
@@ -930,7 +983,12 @@ private struct MessageBubble: View {
                 .buttonStyle(.plain)
             }
 
+            if let reply = message.reply {
+                replyPreview(reply, width: bubbleContentWidth)
+            }
+
             messageTextAndMetadata
+                .frame(width: bubbleContentWidth > 0 ? bubbleContentWidth : nil, alignment: .leading)
         }
         .foregroundStyle(message.isOutgoing ? .white : .primary)
         .padding(.horizontal, 13)
@@ -941,9 +999,60 @@ private struct MessageBubble: View {
                 topLeadingRadius: message.isOutgoing || !joinsPrevious ? 18 : 8,
                 topTrailingRadius: message.isOutgoing && joinsPrevious ? 8 : 18,
                 bottomLeadingRadius: message.isOutgoing || !joinsNext ? 18 : 8,
-                bottomTrailingRadius: message.isOutgoing && joinsNext ? 8 : 18
+                bottomTrailingRadius: message.isOutgoing && joinsNext ? 8 : 18,
+                hasTail: !joinsNext,
+                isOutgoing: message.isOutgoing
             )
         )
+        .background(naturalContentWidthMeasurement)
+        .onPreferenceChange(BubbleContentWidthPreferenceKey.self) {
+            bubbleContentWidth = min($0, maximumBubbleContentWidth)
+        }
+    }
+
+    private var naturalContentWidthMeasurement: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let reply = message.reply {
+                replyPreview(reply, width: 0)
+            }
+            messageTextAndMetadata
+        }
+        .fixedSize(horizontal: true, vertical: false)
+            .hidden()
+            .background(
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: BubbleContentWidthPreferenceKey.self,
+                        value: geometry.size.width
+                    )
+                }
+            )
+    }
+
+    private var maximumBubbleContentWidth: CGFloat {
+        let reservedWidth: CGFloat = message.isOutgoing ? 72 : (isChat ? 104 : 72)
+        return min(UIScreen.main.bounds.width - reservedWidth - 26, 300)
+    }
+
+    private func replyPreview(_ reply: ChatReply, width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(reply.senderName)
+                .font(.caption.weight(.semibold))
+            Text(reply.text)
+                .font(.caption)
+                .lineLimit(1)
+        }
+        .foregroundStyle(message.isOutgoing ? .white.opacity(0.85) : Color.appAccent)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .padding(.leading, 8)
+        .frame(width: width > 0 ? width : nil, alignment: .leading)
+        .background(Color.appAccent.opacity(message.isOutgoing ? 0.22 : 0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(message.isOutgoing ? Color.white.opacity(0.75) : Color.appAccent)
+                .frame(width: 3)
+        }
     }
 
     private var messageText: some View {
@@ -967,11 +1076,17 @@ private struct MessageBubble: View {
 
     private var messageTextAndMetadata: some View {
         messageText
+            .frame(width: messageTextWidth, alignment: .leading)
             .padding(.trailing, metadataSlotWidth)
             .padding(.bottom, 14)
             .overlay(alignment: .bottomTrailing) {
                 messageMetadata.frame(width: metadataSlotWidth, alignment: .trailing)
             }
+    }
+
+    private var messageTextWidth: CGFloat? {
+        guard bubbleContentWidth > metadataSlotWidth else { return nil }
+        return bubbleContentWidth - metadataSlotWidth
     }
 
     private var metadataSlotWidth: CGFloat { message.isEdited ? 76 : 50 }
@@ -994,6 +1109,7 @@ private struct MessageBubble: View {
                 deliveryStatusLabel(status)
             }
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var stickerMetadata: some View {
@@ -1181,23 +1297,18 @@ private struct ChatPhotoCollage: View {
         LazyVGrid(columns: columns, spacing: 2) {
             ForEach(visiblePhotos) { photo in
                 Button { onTap(photo) } label: {
-                    CachedRemoteImage(url: photo.url, contentMode: .fill) {
+                    CachedRemoteImage(url: photo.url, contentMode: .fit) {
                         Color(.secondarySystemBackground)
                             .overlay { ProgressView() }
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: tileHeight)
-                    .clipped()
+                    .aspectRatio(CGFloat(photo.aspectRatio), contentMode: .fit)
+                    .frame(maxHeight: visiblePhotos.count == 1 ? 300 : 180)
                 }
                 .buttonStyle(.plain)
             }
         }
         .frame(width: width)
-    }
-
-    private var tileHeight: CGFloat {
-        if visiblePhotos.count == 1 { return 260 }
-        return visiblePhotos.count <= 4 ? 150 : 100
     }
 }
 
@@ -1298,6 +1409,8 @@ private struct MessageBubbleShape: Shape {
     let topTrailingRadius: CGFloat
     let bottomLeadingRadius: CGFloat
     let bottomTrailingRadius: CGFloat
+    let hasTail: Bool
+    let isOutgoing: Bool
 
     func path(in rect: CGRect) -> Path {
         let maximumRadius = min(rect.width, rect.height) / 2
@@ -1311,9 +1424,35 @@ private struct MessageBubbleShape: Shape {
         path.addLine(to: CGPoint(x: rect.maxX - topTrailing, y: rect.minY))
         path.addArc(center: CGPoint(x: rect.maxX - topTrailing, y: rect.minY + topTrailing), radius: topTrailing, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomTrailing))
-        path.addArc(center: CGPoint(x: rect.maxX - bottomTrailing, y: rect.maxY - bottomTrailing), radius: bottomTrailing, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
-        path.addLine(to: CGPoint(x: rect.minX + bottomLeading, y: rect.maxY))
-        path.addArc(center: CGPoint(x: rect.minX + bottomLeading, y: rect.maxY - bottomLeading), radius: bottomLeading, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        if hasTail && isOutgoing {
+            path.addCurve(
+                to: CGPoint(x: rect.maxX + 5, y: rect.maxY - 6),
+                control1: CGPoint(x: rect.maxX + 1, y: rect.maxY - 4),
+                control2: CGPoint(x: rect.maxX + 5, y: rect.maxY - 5)
+            )
+            path.addCurve(
+                to: CGPoint(x: rect.maxX - 12, y: rect.maxY),
+                control1: CGPoint(x: rect.maxX + 2, y: rect.maxY - 3),
+                control2: CGPoint(x: rect.maxX - 6, y: rect.maxY + 1)
+            )
+        } else {
+            path.addArc(center: CGPoint(x: rect.maxX - bottomTrailing, y: rect.maxY - bottomTrailing), radius: bottomTrailing, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        }
+        path.addLine(to: CGPoint(x: rect.minX + (hasTail && !isOutgoing ? 12 : bottomLeading), y: rect.maxY))
+        if hasTail && !isOutgoing {
+            path.addCurve(
+                to: CGPoint(x: rect.minX - 5, y: rect.maxY - 6),
+                control1: CGPoint(x: rect.minX + 6, y: rect.maxY),
+                control2: CGPoint(x: rect.minX - 5, y: rect.maxY - 5)
+            )
+            path.addCurve(
+                to: CGPoint(x: rect.minX, y: rect.maxY - 10),
+                control1: CGPoint(x: rect.minX - 4, y: rect.maxY - 3),
+                control2: CGPoint(x: rect.minX, y: rect.maxY - 3)
+            )
+        } else {
+            path.addArc(center: CGPoint(x: rect.minX + bottomLeading, y: rect.maxY - bottomLeading), radius: bottomLeading, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        }
         path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeading))
         path.addArc(center: CGPoint(x: rect.minX + topLeading, y: rect.minY + topLeading), radius: topLeading, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
         path.closeSubpath()

@@ -191,6 +191,12 @@ final class LongPollService {
         if (type == 6 || type == 7), event.count > 1, let peerID = event[1].intValue {
             userInfo["peerID"] = peerID
         }
+        if type == 13, event.count > 2,
+           let peerID = event[1].intValue,
+           let messageID = event[2].intValue {
+            userInfo["peerID"] = peerID
+            userInfo["messageID"] = messageID
+        }
         if (type == 8 || type == 9), event.count > 1, let userID = event[1].intValue {
             userInfo["userID"] = abs(userID)
         }

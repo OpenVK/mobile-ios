@@ -723,6 +723,8 @@ struct VKPhotoSize: Decodable {
     let url: String?
     let src: String?
     let type: String?
+    let width: Int?
+    let height: Int?
 }
 
 struct VKVideoAttachment: Decodable {
