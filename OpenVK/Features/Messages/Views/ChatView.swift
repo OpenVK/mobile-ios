@@ -8,6 +8,7 @@ struct ChatView: View {
     @StateObject private var viewModel: ChatViewModel
     @State private var text = ""
     @State private var composerHeight: CGFloat = 40
+    @State private var legacyTextHeight: CGFloat = 36
     @State private var isEmojiPanelPresented = false
     @State private var recentStickers: [VKSticker] = []
     @State private var selectedVideo: ChatVideo?
@@ -57,6 +58,21 @@ struct ChatView: View {
                                 .background(.thinMaterial, in: Capsule())
                                 .padding(.bottom, 10)
                         }
+                    } else if viewModel.canSendMessages {
+                        legacyMessageComposer
+                            .background(
+                                GeometryReader { composerGeometry in
+                                    Color.clear.preference(
+                                        key: ComposerHeightPreferenceKey.self,
+                                        value: composerGeometry.size.height
+                                    )
+                                }
+                            )
+                    } else {
+                        Text("Вы больше не можете отправлять сообщения")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 12)
                     }
                 }
         }
@@ -468,6 +484,52 @@ struct ChatView: View {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var legacyMessageComposer: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 4) {
+                legacyMessageInput
+
+                if hasMessageText {
+                    Button(action: sendLegacyMessage) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.appAccent)
+                    }
+                    .padding(.trailing, 4)
+                    .padding(.vertical, 4)
+                    .transition(.scale.combined(with: .opacity))
+                    .accessibilityLabel("Отправить сообщение")
+                }
+            }
+            .background(Color(.secondarySystemBackground))
+            .cornerRadius(18)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .animation(.spring(response: 0.28, dampingFraction: 0.78), value: hasMessageText)
+        }
+        .background(.bar)
+        .ignoresSafeArea(.container, edges: .bottom)
+    }
+
+    private var legacyMessageInput: some View {
+        CommentTextView(text: $text, placeholder: "Сообщение", height: $legacyTextHeight)
+            .frame(height: min(legacyTextHeight, 120))
+    }
+
+    private func sendLegacyMessage() {
+        let value = text
+        text = ""
+        legacyTextHeight = 36
+        if let editingMessage {
+            viewModel.edit(message: editingMessage, text: value)
+            self.editingMessage = nil
+        } else {
+            viewModel.send(text: value, replyTo: replyToMessage?.id)
+            replyToMessage = nil
+        }
+    }
+
     @available(iOS 26.0, *)
     private func messageActionBanner(title: String, subtitle: String, cancel: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
@@ -717,6 +779,10 @@ private struct LegacyChatTabBarHider: UIViewControllerRepresentable {
                 guard let controller = window.rootViewController,
                       let tabBarController = findTabBarController(in: controller) else { continue }
                 tabBarController.tabBar.isHidden = hidden
+                tabBarController.additionalSafeAreaInsets.bottom = hidden
+                    ? -max(tabBarController.tabBar.bounds.height, 49)
+                    : 0
+                tabBarController.view.setNeedsLayout()
             }
         }
     }
@@ -754,6 +820,10 @@ private struct LegacyChatTabBarHider: UIViewControllerRepresentable {
                 while let controller = current {
                     if let tabBarController = controller.tabBarController {
                         tabBarController.tabBar.isHidden = hidden
+                        tabBarController.additionalSafeAreaInsets.bottom = hidden
+                            ? -max(tabBarController.tabBar.bounds.height, 49)
+                            : 0
+                        tabBarController.view.setNeedsLayout()
                         return
                     }
                     current = controller.parent

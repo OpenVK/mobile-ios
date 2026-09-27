@@ -304,7 +304,7 @@ private class BoundedTextView: UITextView {
     }
 }
 
-private struct CommentTextView: UIViewRepresentable {
+struct CommentTextView: UIViewRepresentable {
     @Binding var text: String
     let placeholder: String
     @Binding var height: CGFloat
