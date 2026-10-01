@@ -19,60 +19,59 @@ struct MainTabView: View {
 
     var body: some View {
         ZStack {
-            ZStack(alignment: .top) {
-                TabView(selection: $selectedTab) {
-                    FeedView(
-                        showNewPost: $showNewPost,
-                        selectedMedia: $selectedMedia,
-                        owningPost: $owningPost
-                    )
-                    .tabItem {
-                        Label(AppTab.feed.label, systemImage: selectedTab == .feed ? AppTab.feed.iconFilled : AppTab.feed.icon)
-                    }
-                    .tag(AppTab.feed)
-
-                    SearchView(
-                        selectedMedia: $selectedMedia,
-                        owningPost: $owningPost
-                    )
-                    .tabItem {
-                        Label(AppTab.search.label, systemImage: selectedTab == .search ? AppTab.search.iconFilled : AppTab.search.icon)
-                    }
-                    .tag(AppTab.search)
-
-                    MessagesView(
-                        selectedMedia: $selectedMedia,
-                        owningPost: $owningPost
-                    )
-                    .tabItem {
-                        Label(AppTab.messages.label, systemImage: selectedTab == .messages ? AppTab.messages.iconFilled : AppTab.messages.icon)
-                    }
-                    .tag(AppTab.messages)
-
-                    MoreView(
-                        selectedMedia: $selectedMedia,
-                        owningPost: $owningPost
-                    )
-                    .tabItem {
-                        Label(AppTab.more.label, systemImage: selectedTab == .more ? AppTab.more.iconFilled : AppTab.more.icon)
-                    }
-                    .tag(AppTab.more)
-                    .badge(auth.friendsCount > 0 ? "\(auth.friendsCount)" : nil)
+            TabView(selection: $selectedTab) {
+                FeedView(
+                    showNewPost: $showNewPost,
+                    selectedMedia: $selectedMedia,
+                    owningPost: $owningPost
+                )
+                .tabItem {
+                    Label(AppTab.feed.label, systemImage: selectedTab == .feed ? AppTab.feed.iconFilled : AppTab.feed.icon)
                 }
-                
+                .tag(AppTab.feed)
+
+                SearchView(
+                    selectedMedia: $selectedMedia,
+                    owningPost: $owningPost
+                )
+                .tabItem {
+                    Label(AppTab.search.label, systemImage: selectedTab == .search ? AppTab.search.iconFilled : AppTab.search.icon)
+                }
+                .tag(AppTab.search)
+
+                MessagesView(
+                    selectedMedia: $selectedMedia,
+                    owningPost: $owningPost
+                )
+                .tabItem {
+                    Label(AppTab.messages.label, systemImage: selectedTab == .messages ? AppTab.messages.iconFilled : AppTab.messages.icon)
+                }
+                .tag(AppTab.messages)
+
+                MoreView(
+                    selectedMedia: $selectedMedia,
+                    owningPost: $owningPost
+                )
+                .tabItem {
+                    Label(AppTab.more.label, systemImage: selectedTab == .more ? AppTab.more.iconFilled : AppTab.more.icon)
+                }
+                .tag(AppTab.more)
+                .badge(auth.friendsCount > 0 ? "\(auth.friendsCount)" : nil)
+            }
+            .overlay(alignment: .top) {
                 if UIDevice.current.userInterfaceIdiom == .phone && topInset >= 44 { // Только iPhone с челкой (>=44) или островком (>=59)
                     BrandingPlate(topInset: topInset)
                         .ignoresSafeArea(.all, edges: .top)
                         .allowsHitTesting(false)
                 }
-
+            }
+            .overlay(alignment: .topTrailing) {
                 if let issue = connectionStatus.issue {
                     ConnectionStatusButton(issue: issue) {
                         connectionStatus.refresh()
                     }
                     .padding(.top, topInset + 48)
                     .padding(.trailing, 12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .zIndex(10)
                 }
             }

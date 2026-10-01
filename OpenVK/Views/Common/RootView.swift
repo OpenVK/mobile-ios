@@ -16,6 +16,10 @@ struct RootView: View {
     @AppStorage("openvk.theme_selection") private var themeSelection = 0
     @AppStorage("openvk.accent_color") private var accentColorName = "Синий"
     @State private var showDisclaimer = !UserDefaults.standard.bool(forKey: "openvk.disclaimer_shown")
+    @State private var portraitTopInset: CGFloat = 0
+    @State private var currentTopInset: CGFloat = 0
+    @State private var isPortrait = true
+    @State private var didRotateToLandscape = false
 
     var body: some View {
         Group {
@@ -28,6 +32,22 @@ struct RootView: View {
             }
         }
         .environmentObject(auth)
+        .padding(.top, legacyTopInsetCorrection)
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { updateSafeArea(from: geometry) }
+                    .onChange(of: geometry.safeAreaInsets.top) { _ in updateSafeArea(from: geometry) }
+                    .onChange(of: geometry.size) { _ in updateSafeArea(from: geometry) }
+            }
+        }
+        .background(alignment: .top) {
+            if legacyTopInsetCorrection > 0 {
+                Rectangle()
+                    .fill(.bar)
+                    .frame(height: legacyTopInsetCorrection)
+            }
+        }
         .accentColor(appAccentColor(for: accentColorName))
         .tint(appAccentColor(for: accentColorName))
         .id(accentColorName)
@@ -48,6 +68,25 @@ struct RootView: View {
                     UserDefaults.standard.set(true, forKey: "openvk.disclaimer_shown")
                 }
             )
+        }
+    }
+
+    private var legacyTopInsetCorrection: CGFloat {
+        guard #unavailable(iOS 16.0), didRotateToLandscape,
+              isPortrait || UIDevice.current.userInterfaceIdiom == .pad else { return 0 }
+        return max(0, portraitTopInset - currentTopInset)
+    }
+
+    private func updateSafeArea(from geometry: GeometryProxy) {
+        let portrait = geometry.size.height > geometry.size.width
+        let topInset = geometry.safeAreaInsets.top
+        isPortrait = portrait
+        currentTopInset = topInset
+        if !portrait {
+            didRotateToLandscape = true
+        }
+        if portrait && topInset > portraitTopInset {
+            portraitTopInset = topInset
         }
     }
 

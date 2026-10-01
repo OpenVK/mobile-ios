@@ -34,7 +34,10 @@ struct ChatView: View {
 
     var body: some View {
         GeometryReader { geometry in
-                messageHistory(viewportHeight: max(0, geometry.size.height - composerHeight))
+                messageHistory(
+                    viewportHeight: max(0, geometry.size.height - composerHeight),
+                    viewportWidth: geometry.size.width
+                )
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if #available(iOS 26.0, *) {
                         if viewModel.canSendMessages {
@@ -197,7 +200,7 @@ struct ChatView: View {
         return "участников"
     }
 
-    private func messageHistory(viewportHeight: CGFloat) -> some View {
+    private func messageHistory(viewportHeight: CGFloat, viewportWidth: CGFloat) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
@@ -206,6 +209,7 @@ struct ChatView: View {
                         MessageBubble(
                             message: message,
                             isChat: conversation.isChat,
+                            viewportWidth: viewportWidth,
                             showsSenderDetails: shouldShowSenderDetails(for: index),
                             joinsPrevious: joinsMessage(at: index, with: index - 1),
                             joinsNext: joinsMessage(at: index, with: index + 1)
@@ -250,6 +254,10 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
+            .chatScrollKeyboardDismissal()
+            .simultaneousGesture(TapGesture().onEnded {
+                dismissChatKeyboard()
+            })
             .overlay(alignment: .bottomTrailing) {
                 if !viewModel.isNearBottom {
                     Button {
@@ -522,7 +530,6 @@ struct ChatView: View {
             }
         }
         .background(.bar)
-        .ignoresSafeArea(.container, edges: .bottom)
         .animation(.easeInOut(duration: 0.15), value: isEmojiPanelPresented)
     }
 
@@ -570,6 +577,11 @@ struct ChatView: View {
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
             .forEach { $0.endEditing(true) }
+    }
+
+    private func dismissChatKeyboard() {
+        isComposerFocused = false
+        endEditing()
     }
 
     private func sendLegacyMessage() {
@@ -831,6 +843,14 @@ private extension View {
             self.background(LegacyChatTabBarHider())
         }
     }
+
+    @ViewBuilder func chatScrollKeyboardDismissal() -> some View {
+        if #available(iOS 16.0, *) {
+            self.scrollDismissesKeyboard(.interactively)
+        } else {
+            self
+        }
+    }
 }
 
 private struct LegacyChatTabBarHider: UIViewControllerRepresentable {
@@ -856,7 +876,7 @@ private struct LegacyChatTabBarHider: UIViewControllerRepresentable {
                       let tabBarController = findTabBarController(in: controller) else { continue }
                 tabBarController.tabBar.isHidden = hidden
                 tabBarController.additionalSafeAreaInsets.bottom = hidden
-                    ? -max(tabBarController.tabBar.bounds.height, 49)
+                    ? -max(0, tabBarController.tabBar.bounds.height - window.safeAreaInsets.bottom)
                     : 0
                 tabBarController.view.setNeedsLayout()
             }
@@ -879,9 +899,18 @@ private struct LegacyChatTabBarHider: UIViewControllerRepresentable {
     }
 
     final class Controller: UIViewController {
+        private var shouldHideTabBar = false
+
         override func didMove(toParent parent: UIViewController?) {
             super.didMove(toParent: parent)
             setTabBarHidden(parent != nil)
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            if shouldHideTabBar {
+                updateTabBarLayout()
+            }
         }
 
         override func viewDidDisappear(_ animated: Bool) {
@@ -890,20 +919,29 @@ private struct LegacyChatTabBarHider: UIViewControllerRepresentable {
         }
 
         func setTabBarHidden(_ hidden: Bool) {
+            shouldHideTabBar = hidden
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                var current: UIViewController? = self
-                while let controller = current {
-                    if let tabBarController = controller.tabBarController {
-                        tabBarController.tabBar.isHidden = hidden
-                        tabBarController.additionalSafeAreaInsets.bottom = hidden
-                            ? -max(tabBarController.tabBar.bounds.height, 49)
-                            : 0
+                self?.updateTabBarLayout()
+            }
+        }
+
+        private func updateTabBarLayout() {
+            var current: UIViewController? = self
+            while let controller = current {
+                if let tabBarController = controller.tabBarController {
+                    let windowBottomInset = tabBarController.view.window?.safeAreaInsets.bottom ?? 0
+                    let bottomInset = shouldHideTabBar
+                        ? -max(0, tabBarController.tabBar.bounds.height - windowBottomInset)
+                        : 0
+                    if tabBarController.tabBar.isHidden != shouldHideTabBar
+                        || tabBarController.additionalSafeAreaInsets.bottom != bottomInset {
+                        tabBarController.tabBar.isHidden = shouldHideTabBar
+                        tabBarController.additionalSafeAreaInsets.bottom = bottomInset
                         tabBarController.view.setNeedsLayout()
-                        return
                     }
-                    current = controller.parent
+                    return
                 }
+                current = controller.parent
             }
         }
     }
@@ -1009,6 +1047,7 @@ private struct ChatMentionText: View {
 private struct MessageBubble: View {
     let message: ChatMessage
     let isChat: Bool
+    let viewportWidth: CGFloat
     let showsSenderDetails: Bool
     let joinsPrevious: Bool
     let joinsNext: Bool
@@ -1021,7 +1060,7 @@ private struct MessageBubble: View {
     let onEdit: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
     @State private var swipeOffset: CGFloat = 0
-    @State private var bubbleContentWidth: CGFloat = 0
+    @State private var measuredContentWidth: CGFloat = 0
 
     var body: some View {
         Group {
@@ -1343,8 +1382,12 @@ private struct MessageBubble: View {
         )
         .background(naturalContentWidthMeasurement)
         .onPreferenceChange(BubbleContentWidthPreferenceKey.self) {
-            bubbleContentWidth = min($0, maximumBubbleContentWidth)
+            measuredContentWidth = $0
         }
+    }
+
+    private var bubbleContentWidth: CGFloat {
+        min(measuredContentWidth, maximumBubbleContentWidth)
     }
 
     private var naturalContentWidthMeasurement: some View {
@@ -1368,7 +1411,7 @@ private struct MessageBubble: View {
 
     private var maximumBubbleContentWidth: CGFloat {
         let reservedWidth: CGFloat = message.isOutgoing ? 72 : (isChat ? 104 : 72)
-        return min(UIScreen.main.bounds.width - reservedWidth - 26, 300)
+        return max(0, min(viewportWidth - reservedWidth - 26, 300))
     }
 
     private func replyPreview(_ reply: ChatReply, width: CGFloat) -> some View {
@@ -1502,7 +1545,7 @@ private struct MessageBubble: View {
 
     private var photoBubbleWidth: CGFloat {
         let reservedWidth: CGFloat = message.isOutgoing ? 72 : (isChat ? 104 : 72)
-        return min(UIScreen.main.bounds.width - reservedWidth, 300)
+        return max(0, min(viewportWidth - reservedWidth, 300))
     }
 
     private var sender: User {
