@@ -36,11 +36,6 @@ enum L10n {
         static let hint        = "Введите запрос"
     }
 
-    enum Messages {
-        static let title = "Сообщения"
-        static let empty = "Нет сообщений"
-    }
-
     enum Profile {
         static let edit          = "Редактировать"
         static let photosHeader  = "ФОТОГРАФИИ"

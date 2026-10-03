@@ -28,6 +28,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         return true
     }
+
 }
 
 @main
@@ -44,11 +45,28 @@ struct OpenVKApp: App {
                     requestNotificationPermissions()
                     updateBackgroundServices()
                 }
-                .onChange(of: scenePhase) { _ in
-                    updateBackgroundServices()
+                .onChange(of: scenePhase) { newPhase in
+                    switch newPhase {
+                    case .active:
+                        updateBackgroundServices()
+                        LongPollService.shared.resumeAfterBackground()
+                    case .inactive, .background:
+                        OnlineService.shared.stop()
+                        AvatarRefreshService.shared.stop()
+                        LongPollService.shared.prepareForBackground()
+                    @unknown default:
+                        break
+                    }
                 }
-                .onChange(of: auth.isAuthenticated) { _ in
-                    updateBackgroundServices()
+                .onChange(of: auth.isAuthenticated) { isAuth in
+                    if isAuth && scenePhase == .active {
+                        updateBackgroundServices()
+                        LongPollService.shared.resumeAfterBackground()
+                    } else if !isAuth {
+                        OnlineService.shared.stop()
+                        AvatarRefreshService.shared.stop()
+                        LongPollService.shared.stop()
+                    }
                 }
         }
     }
@@ -58,6 +76,7 @@ struct OpenVKApp: App {
         if shouldRun {
             OnlineService.shared.start()
             AvatarRefreshService.shared.start()
+            LongPollService.shared.start()
         } else {
             OnlineService.shared.stop()
             AvatarRefreshService.shared.stop()

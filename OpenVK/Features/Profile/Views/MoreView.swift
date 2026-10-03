@@ -120,6 +120,12 @@ struct MoreView: View {
                     }
                     .foregroundColor(.primary)
 
+                    Button(action: { activeAlert = .unavailable }) {
+                        Label("Магазин стикеров", systemImage: "storefront")
+                            .labelStyle(SettingsLabelStyle(iconColor: .appAccent))
+                    }
+                    .foregroundColor(.primary)
+
                     NavigationLink(destination: DocumentsListView()) {
                         Label("Документы", systemImage: "doc.text.fill")
                             .labelStyle(SettingsLabelStyle(iconColor: .gray))

@@ -12,7 +12,6 @@ import Foundation
 struct VKCountersResponse: Decodable {
     let friends: Int?
     let notifications: Int?
-    let messages: Int?
 }
 
 struct VKBalanceResponse: Decodable {

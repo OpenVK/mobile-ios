@@ -19,9 +19,10 @@ We will be happy to accept your bugreports [in our bug-tracker](https://github.c
 You can build your app from source in Xcode latest version.
 
 ## Used Libraries
-The rest of the project is built on native Apple frameworks (SwiftUI, UIKit, Combine, AVFoundation and others) with no third-party dependencies.
+The rest of the project is built on native Apple frameworks (SwiftUI, UIKit, Combine, AVFoundation and others).
 
 1. [VLCKit](https://code.videolan.org/videolan/VLCKit) (LGPL 2.1+) — video playback
+2. [Lottie](https://github.com/airbnb/lottie-ios) (Apache 2.0) — animated stickers; installed through Swift Package Manager
 
 ## OpenVK for iOS License
 [GNU (Affero) GPL v3.0](https://github.com/openvk/mobile-ios/blob/main/COPYING) or later version.

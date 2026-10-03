@@ -80,12 +80,6 @@ enum RepostMode {
     case group
 }
 
-struct ShareRecipient: Identifiable {
-    let id: Int
-    let user: User
-    let subtitle: String
-}
-
 struct RepostGroup: Hashable, Identifiable {
     let id: Int
     let name: String
@@ -102,11 +96,9 @@ struct RepostView: View {
 
     @State private var mode: RepostMode = .chat
 
-    @State private var searchText = ""
-    @State private var conversations: [ShareRecipient] = []
-    @State private var friends: [ShareRecipient] = []
-    @State private var isLoadingChats = true
-    @State private var chatsErrorMessage: String? = nil
+    @State private var conversations: [Conversation] = []
+    @State private var isLoadingConversations = false
+    @State private var conversationsErrorMessage: String? = nil
 
     @State private var groups: [RepostGroup] = []
     @State private var isLoadingGroups = false
@@ -128,31 +120,6 @@ struct RepostView: View {
         let ownerID = post.ownerID ?? post.author.uid ?? 0
         let vkID = post.vkID ?? 0
         return AppConfig.webBaseURL.absoluteString + "wall\(ownerID)_\(vkID)"
-    }
-
-    private var chatMessage: String {
-        let linkLine = "> \(postLink)"
-        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return linkLine
-        }
-        return linkLine + "\n" + trimmed
-    }
-
-    private var conversationIDs: Set<Int> {
-        Set(conversations.map { $0.id })
-    }
-
-    private var visibleRecipients: [ShareRecipient] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return conversations }
-        let matches: (ShareRecipient) -> Bool = { recipient in
-            recipient.user.displayName.lowercased().contains(query) ||
-                recipient.user.username.lowercased().contains(query)
-        }
-        let chatMatches = conversations.filter(matches)
-        let friendMatches = friends.filter { !conversationIDs.contains($0.id) }
-        return chatMatches + friendMatches.filter(matches)
     }
 
     var body: some View {
@@ -192,8 +159,8 @@ struct RepostView: View {
         .navigationViewStyle(StackNavigationViewStyle())
         .modifier(HalfSheet(compact: mode == .myWall, fixed: mode == .myWall))
         .onAppear {
-            loadChats()
             loadAdminGroups()
+            loadConversations()
         }
     }
 
@@ -201,7 +168,7 @@ struct RepostView: View {
     private var contentArea: some View {
         switch mode {
         case .chat:
-            chatArea
+            recipientsArea
         case .myWall:
             EmptyView()
         case .group:
@@ -209,15 +176,13 @@ struct RepostView: View {
         }
     }
 
-    private var chatArea: some View {
+    private var recipientsArea: some View {
         VStack(spacing: 0) {
-            searchField
-
-            if isLoadingChats {
+            if isLoadingConversations {
                 Spacer()
-                LongLoadingIndicator(message: "Насколько сильно любите диалоги в опенвк? Я очень... :)", timeout: 5.0)
+                ProgressView()
                 Spacer()
-            } else if let error = chatsErrorMessage {
+            } else if let error = conversationsErrorMessage {
                 Spacer()
                 Text(error)
                     .font(.system(size: 14))
@@ -225,59 +190,49 @@ struct RepostView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
                 Spacer()
+            } else if conversations.isEmpty {
+                Spacer()
+                Text("Нет диалогов для отправки")
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+                Spacer()
             } else {
-                List(visibleRecipients) { recipient in
-                    recipientRow(recipient)
+                List(conversations) { conversation in
+                    recipientRow(conversation)
                 }
                 .listStyle(PlainListStyle())
             }
         }
     }
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 14))
-                .foregroundColor(.secondary)
-            TextField("Поиск чатов и друзей", text: $searchText)
-                .font(.system(size: 15))
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(10)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-    }
-
-    private func recipientRow(_ recipient: ShareRecipient) -> some View {
+    private func recipientRow(_ conversation: Conversation) -> some View {
         HStack(spacing: 12) {
-            Avatar(user: recipient.user, size: 44)
+            Avatar(
+                user: conversation.peer,
+                size: 44,
+                placeholderImageName: conversation.isChat ? "chat_default_100" : nil
+            )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(recipient.user.displayName)
+                Text(conversation.peer.displayName)
                     .font(.system(size: 15))
                     .foregroundColor(.primary)
                     .lineLimit(1)
-                Text(recipient.subtitle)
+                Text(conversation.isChat ? "Беседа" : "Личное сообщение")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
-                    .lineLimit(1)
             }
 
             Spacer(minLength: 8)
 
             sendRowButton(
-                isSent: sentPeerIDs.contains(recipient.id),
-                isSending: sendingPeerID == recipient.id,
-                action: { sendToChat(recipient) }
+                isSent: sentPeerIDs.contains(conversation.id),
+                isSending: sendingPeerID == conversation.id,
+                action: { sendToConversation(conversation) }
             )
         }
         .padding(.vertical, 2)
     }
-
     private func sendRowButton(isSent: Bool,
                                isSending: Bool,
                                action: @escaping () -> Void) -> some View {
@@ -286,29 +241,15 @@ struct RepostView: View {
                 if isSending {
                     ProgressView()
                 } else if isSent {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Отправлено")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .overlay(
-                        Capsule()
-                            .stroke(Color(.systemGray4), lineWidth: 1)
-                    )
+                    Image(systemName: "checkmark")
+                        .foregroundColor(.secondary)
                 } else {
                     Text("Отправить")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(.appAccent)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .overlay(
-                            Capsule()
-                                .stroke(Color.appAccent, lineWidth: 1)
-                        )
+                        .overlay(Capsule().stroke(Color.appAccent, lineWidth: 1))
                 }
             }
             .frame(minWidth: 60)
@@ -483,19 +424,20 @@ struct RepostView: View {
 
     private var actionRow: some View {
         HStack(spacing: 0) {
+            shareAction(icon: "paperplane.fill",
+                        title: "В сообщении",
+                        isSelected: mode == .chat) {
+                withAnimation { mode = .chat }
+            }
             shareAction(icon: "person.fill",
                         title: "На своей странице",
                         isSelected: mode == .myWall) {
-                withAnimation {
-                    mode = mode == .myWall ? .chat : .myWall
-                }
+                withAnimation { mode = .myWall }
             }
             shareAction(icon: "person.2.fill",
                         title: "На стене группы",
                         isSelected: mode == .group) {
-                withAnimation {
-                    mode = mode == .group ? .chat : .group
-                }
+                withAnimation { mode = .group }
             }
             shareAction(icon: "link",
                         title: "Скопировать ссылку",
@@ -533,73 +475,6 @@ struct RepostView: View {
         .buttonStyle(PlainButtonStyle())
     }
 
-    private func loadChats() {
-        isLoadingChats = true
-        chatsErrorMessage = nil
-
-        let group = DispatchGroup()
-
-        group.enter()
-        MessagesService.shared.fetchConversations(offset: 0, count: 30) { result in
-            defer { group.leave() }
-            switch result {
-            case .success(let items):
-                conversations = items.map { conversation in
-                    ShareRecipient(
-                        id: conversation.peer.uid ?? 0,
-                        user: conversation.peer,
-                        subtitle: "@\(conversation.peer.username)"
-                    )
-                }
-            case .failure(let error):
-                chatsErrorMessage = error.localizedDescription
-            }
-        }
-
-        group.enter()
-        let ownerID = AuthService.shared.currentUser?.uid ?? 0
-        APIClient.shared.call(
-            method: "friends.get",
-            parameters: [
-                "user_id": "\(ownerID)",
-                "fields": "photo_100,online,last_seen",
-                "count": "100"
-            ],
-            httpMethod: "GET",
-            as: VKSearchResponseInner<VKUserProfile>.self
-        ) { result in
-            defer { group.leave() }
-            switch result {
-            case .success(let inner):
-                friends = (inner.items ?? []).map { vkUser -> ShareRecipient in
-                    let id = vkUser.id
-                    let name = "\(vkUser.firstName ?? "") \(vkUser.lastName ?? "")"
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    return ShareRecipient(
-                        id: id,
-                        user: User(
-                            uid: id,
-                            username: vkUser.screenName ?? "id\(id)",
-                            displayName: name.isEmpty ? "Пользователь" : name,
-                            avatarURL: vkUser.photo100.flatMap { URL(string: $0) },
-                            isOnline: vkUser.online == 1,
-                            onlinePlatform: vkUser.lastSeen?.platformName
-                        ),
-                        subtitle: "@\(vkUser.screenName ?? "id\(id)")"
-                    )
-                }
-            case .failure(let error):
-                if chatsErrorMessage == nil {
-                    chatsErrorMessage = error.localizedDescription
-                }
-            }
-        }
-
-        group.notify(queue: .main) {
-            isLoadingChats = false
-        }
-    }
-
     private func loadAdminGroups() {
         isLoadingGroups = true
         groupsErrorMessage = nil
@@ -634,20 +509,20 @@ struct RepostView: View {
         }
     }
 
-    private func sendToChat(_ recipient: ShareRecipient) {
-        guard sendingPeerID == nil else { return }
-        sendingPeerID = recipient.id
-        errorMessage = nil
+    private func loadConversations() {
+        guard conversations.isEmpty, !isLoadingConversations else { return }
+        isLoadingConversations = true
+        conversationsErrorMessage = nil
 
-        MessagesService.shared.send(text: chatMessage, to: recipient.id) { result in
-            sendingPeerID = nil
-            switch result {
-            case .success:
-                HapticManager.impact(.medium)
-                sentPeerIDs.insert(recipient.id)
-            case .failure(let error):
-                errorMessage = error.localizedDescription
-                showError = true
+        MessagesService.shared.fetchConversations(offset: 0, count: 100) { result in
+            DispatchQueue.main.async {
+                isLoadingConversations = false
+                switch result {
+                case .success(let page):
+                    conversations = page.conversations
+                case .failure:
+                    conversationsErrorMessage = "Не удалось загрузить список диалогов"
+                }
             }
         }
     }
@@ -696,6 +571,36 @@ struct RepostView: View {
             case .failure(let error):
                 errorMessage = error.localizedDescription
                 showError = true
+            }
+        }
+    }
+
+    private func sendToConversation(_ conversation: Conversation) {
+        guard sendingPeerID == nil else { return }
+        sendingPeerID = conversation.id
+        errorMessage = nil
+
+        APIClient.shared.call(
+            method: "messages.send",
+            parameters: [
+                "peer_id": String(conversation.id),
+                "message": comment,
+                "attachment": repostObject,
+                "random_id": String(Int.random(in: 1...Int.max))
+            ],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            DispatchQueue.main.async {
+                sendingPeerID = nil
+                switch result {
+                case .success:
+                    HapticManager.impact(.medium)
+                    sentPeerIDs.insert(conversation.id)
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                    showError = true
+                }
             }
         }
     }

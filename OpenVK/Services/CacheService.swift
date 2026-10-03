@@ -42,6 +42,12 @@ final class ImageCache {
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }()
+    private lazy var permanentDiskDirectory: URL = {
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let directory = caches.appendingPathComponent("openvk_message_media_cache_v1", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }()
 
     private init() {
         cache.countLimit = 300
@@ -56,6 +62,10 @@ final class ImageCache {
                 return nil
             }
             return entry.image
+        }
+
+        if let permanentImage = readPermanentImage(for: url) {
+            return permanentImage
         }
 
         guard let diskEntry = readDiskEntry(for: url),
@@ -142,9 +152,23 @@ final class ImageCache {
         }
     }
 
+    func prefetchPermanently(_ urls: [URL]) {
+        let semaphore = DispatchSemaphore(value: 4)
+        for url in Set(urls) where readPermanentImage(for: url) == nil {
+            prefetchQueue.async { [weak self] in
+                guard let self else { return }
+                semaphore.wait()
+                self.loadPermanently(url) { _ in
+                    semaphore.signal()
+                }
+            }
+        }
+    }
+
     func clear() {
         cache.removeAllObjects()
         try? fileManager.removeItem(at: diskDirectory)
+        try? fileManager.removeItem(at: permanentDiskDirectory)
     }
 
     func diskCacheSizeBytes() -> Int64 {
@@ -154,9 +178,18 @@ final class ImageCache {
             options: .skipsHiddenFiles
         ) else { return 0 }
 
-        return files.compactMap {
+        let regularSize = files.compactMap {
             (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
         }.reduce(0) { $0 + Int64($1) }
+        let permanentFiles = (try? fileManager.contentsOfDirectory(
+            at: permanentDiskDirectory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: .skipsHiddenFiles
+        )) ?? []
+        let permanentSize = permanentFiles.compactMap {
+            (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+        }.reduce(0) { $0 + Int64($1) }
+        return regularSize + permanentSize
     }
 
     private struct DiskEntry {
@@ -169,6 +202,12 @@ final class ImageCache {
         let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
         let name = digest.map { String(format: "%02x", $0) }.joined()
         return diskDirectory.appendingPathComponent(name).appendingPathExtension("image")
+    }
+
+    private func permanentDiskURL(for url: URL) -> URL {
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined()
+        return permanentDiskDirectory.appendingPathComponent(name).appendingPathExtension("image")
     }
 
     private func readDiskEntry(for url: URL) -> DiskEntry? {
@@ -191,6 +230,43 @@ final class ImageCache {
         try? data.write(to: fileURL, options: .atomic)
         try? fileManager.setAttributes([.modificationDate: createdAt], ofItemAtPath: fileURL.path)
         trimDiskCacheIfNeeded()
+    }
+
+    private func readPermanentImage(for url: URL) -> UIImage? {
+        guard let data = try? Data(contentsOf: permanentDiskURL(for: url)) else { return nil }
+        return UIImage(data: data)
+    }
+
+    private func loadPermanently(_ url: URL, completion: @escaping (UIImage?) -> Void) {
+        if let image = readPermanentImage(for: url) {
+            DispatchQueue.main.async { completion(image) }
+            return
+        }
+        if let existing = image(for: url, maximumAge: diskLifetime) {
+            persistPermanently(image: existing, from: url)
+            DispatchQueue.main.async { completion(existing) }
+            return
+        }
+
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let self, let data, let image = UIImage(data: data) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            self.persistPermanently(data: data, image: image, for: url)
+            DispatchQueue.main.async { completion(image) }
+        }.resume()
+    }
+
+    private func persistPermanently(image: UIImage, from url: URL) {
+        guard let data = image.pngData() ?? image.jpegData(compressionQuality: 1) else { return }
+        persistPermanently(data: data, image: image, for: url)
+    }
+
+    private func persistPermanently(data: Data, image: UIImage, for url: URL) {
+        try? fileManager.createDirectory(at: permanentDiskDirectory, withIntermediateDirectories: true)
+        try? data.write(to: permanentDiskURL(for: url), options: .atomic)
+        cache.setObject(Entry(image: image, createdAt: Date()), forKey: url as NSURL, cost: data.count)
     }
 
     private func removeDiskEntry(for url: URL) {
@@ -223,6 +299,101 @@ final class ImageCache {
             try? fileManager.removeItem(at: entry.url)
             total -= entry.size
         }
+    }
+}
+
+final class VideoSegmentCache {
+    static let shared = VideoSegmentCache()
+
+    private let segmentSize = 2 * 1024 * 1024
+    private let fileManager = FileManager.default
+    private let queue = DispatchQueue(label: "org.openvk.video-segment-cache")
+    private var activeTasks: [UUID: URLSessionDataTask] = [:]
+    private lazy var directory: URL = {
+        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let directory = caches.appendingPathComponent("openvk_video_segments_v1", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }()
+
+    private init() {}
+
+    @discardableResult
+    func startCaching(_ url: URL) -> UUID {
+        let token = UUID()
+        queue.async { [weak self] in
+            self?.cacheNextSegment(for: url, offset: 0, token: token)
+        }
+        return token
+    }
+
+    func stopCaching(_ token: UUID) {
+        queue.async { [weak self] in
+            self?.activeTasks.removeValue(forKey: token)?.cancel()
+        }
+    }
+
+    func clear() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.activeTasks.values.forEach { $0.cancel() }
+            self.activeTasks.removeAll()
+            try? self.fileManager.removeItem(at: self.directory)
+        }
+    }
+
+    func cacheSizeBytes() -> Int64 {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: .skipsHiddenFiles
+        ) else { return 0 }
+        return files.compactMap {
+            (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+        }.reduce(0) { $0 + Int64($1) }
+    }
+
+    private func cacheNextSegment(for url: URL, offset: Int, token: UUID) {
+        guard activeTasks[token] == nil else { return }
+        let fileURL = segmentURL(for: url, offset: offset)
+        if let data = try? Data(contentsOf: fileURL), !data.isEmpty {
+            cacheNextSegment(for: url, offset: offset + data.count, token: token)
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("bytes=\(offset)-\(offset + segmentSize - 1)", forHTTPHeaderField: "Range")
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let self else { return }
+            self.queue.async {
+                guard self.activeTasks.removeValue(forKey: token) != nil,
+                      let data, !data.isEmpty else { return }
+                try? self.fileManager.createDirectory(at: self.directory, withIntermediateDirectories: true)
+                try? data.write(to: fileURL, options: .atomic)
+
+                let totalLength = self.totalLength(from: response)
+                let nextOffset = offset + data.count
+                if totalLength.map({ nextOffset < $0 }) ?? (data.count == self.segmentSize) {
+                    self.cacheNextSegment(for: url, offset: nextOffset, token: token)
+                }
+            }
+        }
+        activeTasks[token] = task
+        task.resume()
+    }
+
+    private func segmentURL(for url: URL, offset: Int) -> URL {
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+        let name = digest.map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent("\(name)-\(offset)").appendingPathExtension("segment")
+    }
+
+    private func totalLength(from response: URLResponse?) -> Int? {
+        guard let http = response as? HTTPURLResponse,
+              let range = http.value(forHTTPHeaderField: "Content-Range"),
+              let totalString = range.split(separator: "/").last,
+              let total = Int(totalString) else { return nil }
+        return total
     }
 }
 
@@ -373,10 +544,11 @@ final class CacheService {
     private struct Record: Codable {
         let schemaVersion: Int
         let createdAt: Date
+        let expiresAt: Date?
         let payload: Data
     }
 
-    private let schemaVersion = 2
+    private let schemaVersion = 3
     private let fallbackLifetime: TimeInterval = 24 * 60 * 60
     private let cacheDirectoryName = "openvk_response_cache_v2"
     private let legacyCacheDirectoryName = "openvk_api_cache"
@@ -411,8 +583,15 @@ final class CacheService {
             return nil
         }
 
-        let maxAge = maximumAge ?? fallbackLifetime
-        guard Date().timeIntervalSince(record.createdAt) <= maxAge else {
+        let isExpired: Bool
+        if let maximumAge {
+            isExpired = Date().timeIntervalSince(record.createdAt) > maximumAge
+        } else if let expiresAt = record.expiresAt {
+            isExpired = Date() > expiresAt
+        } else {
+            isExpired = false
+        }
+        guard !isExpired else {
             try? fileManager.removeItem(at: fileURL)
             return nil
         }
@@ -420,7 +599,21 @@ final class CacheService {
     }
 
     func cache(data: Data, for key: String) {
-        let record = Record(schemaVersion: schemaVersion, createdAt: Date(), payload: data)
+        let record = Record(
+            schemaVersion: schemaVersion,
+            createdAt: Date(),
+            expiresAt: Date().addingTimeInterval(fallbackLifetime),
+            payload: data
+        )
+        write(record: record, for: key)
+    }
+
+    func cachePermanently(data: Data, for key: String) {
+        let record = Record(schemaVersion: schemaVersion, createdAt: Date(), expiresAt: nil, payload: data)
+        write(record: record, for: key)
+    }
+
+    private func write(record: Record, for key: String) {
         guard let encoded = try? JSONEncoder().encode(record) else { return }
 
         lock.lock()
@@ -443,6 +636,7 @@ final class CacheService {
         lock.unlock()
 
         ImageCache.shared.clear()
+        VideoSegmentCache.shared.clear()
         URLCache.shared.removeAllCachedResponses()
     }
 
@@ -451,7 +645,9 @@ final class CacheService {
         cleanupExpiredRecords()
         let responseCacheBytes = directorySize(url: cacheDirectory)
         lock.unlock()
-        return responseCacheBytes + ImageCache.shared.diskCacheSizeBytes() + Int64(URLCache.shared.currentDiskUsage)
+        return responseCacheBytes + ImageCache.shared.diskCacheSizeBytes()
+            + VideoSegmentCache.shared.cacheSizeBytes()
+            + Int64(URLCache.shared.currentDiskUsage)
     }
 
     func totalCacheSizeString() -> String {
@@ -488,7 +684,7 @@ final class CacheService {
             guard let data = try? Data(contentsOf: file),
                   let record = try? JSONDecoder().decode(Record.self, from: data),
                   record.schemaVersion == schemaVersion,
-                  Date().timeIntervalSince(record.createdAt) <= fallbackLifetime else {
+                  (record.expiresAt.map { $0 > Date() } ?? true) else {
                 try? fileManager.removeItem(at: file)
                 continue
             }

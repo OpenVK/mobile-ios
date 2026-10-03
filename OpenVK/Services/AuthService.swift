@@ -32,9 +32,6 @@ final class AuthService: ObservableObject {
     @Published var notificationsCount: Int = 0 {
         didSet { updateAppIconBadge() }
     }
-    @Published var messagesCount: Int = 0 {
-        didSet { updateAppIconBadge() }
-    }
     @Published var balanceVotes: Int = 0
     @Published var isBalanceLoading: Bool = false
 
@@ -198,7 +195,6 @@ final class AuthService: ObservableObject {
                 case .success(let response):
                     self?.friendsCount = response.friends ?? 0
                     self?.notificationsCount = response.notifications ?? 0
-                    self?.messagesCount = response.messages ?? 0
                 case .failure(let error):
                     print("Failed to fetch counters: \(error.localizedDescription)")
                 }
@@ -229,12 +225,10 @@ final class AuthService: ObservableObject {
     }
 
     func updateAppIconBadge() {
-        let showMessages = UserDefaults.standard.object(forKey: "badge_msg") as? Bool ?? true
         let showNotifications = UserDefaults.standard.object(forKey: "badge_notify") as? Bool ?? true
         let showFriends = UserDefaults.standard.object(forKey: "badge_friend") as? Bool ?? true
 
         var totalBadge = 0
-        if showMessages { totalBadge += messagesCount }
         if showNotifications { totalBadge += notificationsCount }
         if showFriends { totalBadge += friendsCount }
 

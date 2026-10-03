@@ -109,7 +109,7 @@ enum NavigationDestinationType: String, Codable, CaseIterable {
         case .search:
             return AnyView(EmptyView())
         case .messages:
-            return AnyView(EmptyView())
+            return AnyView(UnderDevelopmentView(section: "Сообщения"))
         case .profile:
             return AnyView(EmptyView())
         case .friends:

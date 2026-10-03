@@ -165,7 +165,7 @@ final class SearchService: SearchServiceProtocol {
     func searchUsers(query: String, sort: Int = 4, onlyOnline: Bool = false, offset: Int = 0, count: Int = 30, completion: @escaping ([User], Int) -> Void) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        let fields = "photo_100,photo_200,city,online,status,friend_status,counters,about,personal,sex,site,last_seen,verified,can_write_private_message"
+        let fields = "photo_100,photo_200,city,online,status,friend_status,counters,about,personal,sex,site,last_seen,verified,screen_name,deactivated,can_write_private_message"
         var params: [String: String] = [
             "q": trimmed,
             "fields": fields,
