@@ -7,10 +7,13 @@ import Foundation
 
 protocol MessagesServiceProtocol {
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
-    func fetchHistory(peerID: Int, offset: Int, count: Int, completion: @escaping (Result<MessagesPage, Error>) -> Void)
+    func cachedHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> MessagesPage?
+    func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool)
+    func fetchHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool, completion: @escaping (Result<MessagesPage, Error>) -> Void)
     func sendMessage(peerID: Int, text: String, replyTo: Int?, completion: @escaping (Result<Int, Error>) -> Void)
     func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void)
     func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
+    func cachedStickerPacks() -> [VKStickerPack]?
     func setTyping(peerID: Int)
     func markAsRead(peerID: Int)
     func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
@@ -29,9 +32,12 @@ final class MessagesService: MessagesServiceProtocol {
         self.client = client
     }
 
-    func cachedHistory(peerID: Int, offset: Int, count: Int) -> MessagesPage? {
-        guard let data = CacheService.shared.cachedData(for: historyCacheKey(peerID: peerID, offset: offset, count: count)),
-              let cachedPage = try? JSONDecoder().decode(CachedMessagesPage.self, from: data) else {
+    func cachedHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int? = nil, reverse: Bool = false) -> MessagesPage? {
+        guard let data = CacheService.shared.cachedData(for: historyCacheKey(peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse)),
+              let cachedPage = try? JSONDecoder().decode(CachedMessagesPage.self, from: data),
+              cachedPage.count >= cachedPage.messages.count,
+              cachedPage.messages.allSatisfy({ $0.id > 0 }),
+              zip(cachedPage.messages, cachedPage.messages.dropFirst()).allSatisfy({ $0.0.id < $0.1.id }) else {
             return nil
         }
         return MessagesPage(count: cachedPage.count, messages: cachedPage.messages)
@@ -45,19 +51,22 @@ final class MessagesService: MessagesServiceProtocol {
         return packs
     }
 
-    func fetchHistory(peerID: Int, offset: Int = 0, count: Int = 40, completion: @escaping (Result<MessagesPage, Error>) -> Void) {
+    func fetchHistory(peerID: Int, offset: Int = 0, count: Int = 40, startMessageID: Int? = nil, reverse: Bool = false, completion: @escaping (Result<MessagesPage, Error>) -> Void) {
+        var parameters = ["peer_id": String(peerID), "offset": String(offset), "count": String(count), "extended": "1"]
+        if let startMessageID { parameters["start_message_id"] = String(startMessageID) }
+        if reverse { parameters["rev"] = "1" }
         client.call(
             method: "messages.getHistory",
-            parameters: ["peer_id": String(peerID), "offset": String(offset), "count": String(count), "extended": "1"],
+            parameters: parameters,
             httpMethod: "GET",
             as: VKMessagesHistoryResponse.self
         ) { result in
             switch result {
             case .success(let response):
                 let profiles = response.profiles ?? []
-                let messages = (response.items ?? []).map { ChatMessage(message: $0, profiles: profiles) }.reversed()
-                let page = MessagesPage(count: response.count ?? messages.count, messages: Array(messages))
-                self.cache(page: page, peerID: peerID, offset: offset, count: count)
+                let items = (response.items ?? []).map { ChatMessage(message: $0, profiles: profiles) }
+                let page = MessagesPage(count: response.count ?? items.count, messages: reverse ? items : Array(items.reversed()))
+                self.cacheHistory(page: page, peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse)
                 completion(.success(page))
             case .failure(let error): completion(.failure(error))
             }
@@ -101,9 +110,9 @@ final class MessagesService: MessagesServiceProtocol {
         }
     }
 
-    private func cache(page: MessagesPage, peerID: Int, offset: Int, count: Int) {
+    func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool = false) {
         guard let data = try? JSONEncoder().encode(CachedMessagesPage(count: page.count, messages: page.messages)) else { return }
-        CacheService.shared.cachePermanently(data: data, for: historyCacheKey(peerID: peerID, offset: offset, count: count))
+        CacheService.shared.cachePermanently(data: data, for: historyCacheKey(peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse))
     }
 
     private func cacheStickerPacks(_ packs: [VKStickerPack]) {
@@ -111,8 +120,11 @@ final class MessagesService: MessagesServiceProtocol {
         CacheService.shared.cachePermanently(data: data, for: "messages.sticker-packs")
     }
 
-    private func historyCacheKey(peerID: Int, offset: Int, count: Int) -> String {
-        "messages.history.\(peerID).\(offset).\(count)"
+    private func historyCacheKey(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> String {
+        let userID = AuthService.shared.currentUser?.uid ?? 0
+        let base = "messages.history.\(AppConfig.currentHost).\(userID).\(peerID).\(offset).\(count)"
+        let anchored = startMessageID.map { "\(base).from.\($0)" } ?? base
+        return reverse ? "\(anchored).rev" : anchored
     }
 
     func setTyping(peerID: Int) {

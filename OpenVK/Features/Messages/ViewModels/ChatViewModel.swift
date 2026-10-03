@@ -3,21 +3,20 @@ import SwiftUI
 
 enum ChatScrollRequest: Equatable {
     case initial(messageID: Int?)
-    case preservePosition(messageID: Int)
     case message(messageID: Int)
     case bottom(animated: Bool)
 }
 
 private struct SavedChatPosition: Codable {
     let messageID: Int
-    let historyOffset: Int
 }
 
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var isLoading = false
-    @Published private(set) var isLoadingOlder = false
+    private(set) var isLoadingOlder = false
+    private(set) var isLoadingNewer = false
     @Published var errorMessage: String?
     @Published var typingText: String?
     @Published private(set) var stickerPacks: [VKStickerPack] = []
@@ -31,8 +30,8 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var unreadMessageCount: Int
 
     let conversation: Conversation
-    private let service: MessagesService
-    private let pageSize = 40
+    private let service: MessagesServiceProtocol
+    let pageSize = 40
     private var offset = 0
     private var totalCount = 0
     private var hasMore = true
@@ -42,7 +41,23 @@ final class ChatViewModel: ObservableObject {
     private var typingNames: [Int: String] = [:]
     private var didLoadMessages = false
     private var lastRememberedMessageID: Int?
-    private var newestHistoryOffset = 0
+    private var visibleMessageID: Int?
+    private var historyAnchorID: Int?
+    private var newestLoadedMessageID: Int?
+    private var pendingScrollRequestID: Int?
+
+    var canLoadOlderPage: Bool {
+        hasMore && !messages.isEmpty && !isLoading && !isLoadingOlder && !isLoadingNewer
+            && pendingScrollRequestID == nil
+    }
+
+    var canLoadNewerPage: Bool {
+        historyAnchorID != nil && newestLoadedMessageID != nil
+            && !isLoading && !isLoadingOlder && !isLoadingNewer
+            && pendingScrollRequestID == nil
+    }
+    private var historyRequestToken = 0
+    private var cachePositionTask: Task<Void, Never>?
 
     private var positionStorageKey: String {
         let host = AppConfig.currentHost
@@ -50,7 +65,7 @@ final class ChatViewModel: ObservableObject {
         return "openvk.chat.position.\(host).\(userID).\(conversation.id)"
     }
 
-    init(conversation: Conversation, service: MessagesService = .shared) {
+    init(conversation: Conversation, service: MessagesServiceProtocol = MessagesService.shared) {
         self.conversation = conversation
         self.service = service
         isPeerOnline = conversation.peer.isOnline
@@ -64,27 +79,47 @@ final class ChatViewModel: ObservableObject {
     }
 
     func load() {
-        guard !isLoading else { return }
+        guard !isLoading, !isLoadingOlder else { return }
+        // A restored page is anchored to a message. Refreshing from offset 0 here
+        // would join two non-adjacent ranges and break subsequent pagination.
+        if didLoadMessages && historyAnchorID != nil { return }
         isLoading = true
         errorMessage = nil
-        let savedPosition = didLoadMessages ? nil : self.savedPosition()
-        let initialOffset = max(0, (savedPosition?.historyOffset ?? 0) - pageSize + 1)
-        if !didLoadMessages,
-           let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize) {
-            applyCachedPage(cachedPage, initialOffset: initialOffset, savedMessageID: savedPosition?.messageID)
+        historyRequestToken &+= 1
+        let requestToken = historyRequestToken
+        let isInitialLoad = !didLoadMessages
+        let savedMessageID = isInitialLoad ? savedPosition()?.messageID : nil
+        let anchorID = savedMessageID.flatMap { $0 > 0 ? $0 : nil }
+        let initialOffset = anchorID == nil ? 0 : -(pageSize / 2)
+        if isInitialLoad,
+           let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false),
+           anchorID == nil || cachedPage.messages.contains(where: { $0.id == anchorID }) {
+            applyCachedPage(cachedPage, anchorID: anchorID, savedMessageID: savedMessageID)
         }
-        service.fetchHistory(peerID: conversation.id, offset: initialOffset, count: pageSize) { [weak self] result in
-            guard let self else { return }
+        service.fetchHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false) { [weak self] result in
+            guard let self, self.historyRequestToken == requestToken else { return }
             switch result {
             case .success(let page):
-                let isInitialLoad = !self.didLoadMessages
+                if isInitialLoad, let anchorID,
+                   !page.messages.contains(where: { $0.id == anchorID }) {
+                    if self.messages.contains(where: { $0.id == anchorID }) {
+                        self.isLoading = false
+                        return
+                    }
+                    self.loadLatestAfterMissingAnchor()
+                    return
+                }
                 let existingIDs = Set(self.messages.map(\.id))
-                let newIncomingMessageArrived = self.didLoadMessages && page.messages.contains {
+                let wasShowingCachedPage = isInitialLoad && self.didLoadMessages
+                let newIncomingMessageArrived = !isInitialLoad && page.messages.contains {
                     !existingIDs.contains($0.id) && !$0.isOutgoing
                 }
-                self.messages = isInitialLoad
+                let overlapsCachedPage = !Set(self.messages.map(\.id)).isDisjoint(with: page.messages.map(\.id))
+                self.messages = isInitialLoad && !wasShowingCachedPage
                     ? self.mergingTransientMessages(into: page.messages)
-                    : self.mergingLoadedMessages(page.messages)
+                    : wasShowingCachedPage && !overlapsCachedPage
+                        ? self.messages
+                        : self.mergingLoadedMessages(page.messages)
                 self.prefetchMedia(for: page.messages)
                 self.didLoadMessages = true
                 if newIncomingMessageArrived {
@@ -97,13 +132,25 @@ final class ChatViewModel: ObservableObject {
                     self.canSendMessages = false
                 }
                 self.totalCount = page.count
-                self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
-                self.service.markAsRead(peerID: self.conversation.id)
                 if isInitialLoad {
-                    self.newestHistoryOffset = initialOffset
-                    self.offset = initialOffset + page.messages.count
+                    if wasShowingCachedPage && !overlapsCachedPage {
+                        self.historyAnchorID = self.messages.last(where: { $0.id > 0 })?.id
+                    } else {
+                        self.historyAnchorID = self.olderHistoryAnchor(for: page, requestedAnchor: anchorID)
+                        self.newestLoadedMessageID = self.messages.last(where: { $0.id > 0 })?.id
+                    }
+                    self.isNearBottom = self.historyAnchorID == nil
+                    self.offset = self.messages.filter { $0.id > 0 }.count
+                    self.hasMore = self.offset < self.totalCount && !self.messages.isEmpty
+                    if !wasShowingCachedPage {
+                        self.requestScroll(.initial(messageID: savedMessageID))
+                    }
+                } else {
+                    self.offset = self.messages.filter { $0.id > 0 }.count
                     self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
-                    self.requestScroll(.initial(messageID: savedPosition?.messageID))
+                }
+                if self.historyAnchorID == nil {
+                    self.service.markAsRead(peerID: self.conversation.id)
                 }
             case .failure(let error): self.errorMessage = error.localizedDescription
             }
@@ -111,20 +158,61 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func loadOlderIfNeeded(message: ChatMessage) {
-        guard message.id == messages.first?.id, hasMore, !isLoadingOlder else { return }
+    @discardableResult
+    func loadOlderIfNeeded(message: ChatMessage) -> Bool {
+        guard message.id == messages.first?.id, hasMore, !isLoading, !isLoadingOlder, !isLoadingNewer,
+              pendingScrollRequestID == nil else { return false }
         isLoadingOlder = true
-        let requestedOffset = offset
-        if let cachedPage = service.cachedHistory(peerID: conversation.id, offset: requestedOffset, count: pageSize) {
-            insertOlder(cachedPage, requestedOffset: requestedOffset, preserving: message.id)
+        let boundaryID = message.id
+        let requestToken = historyRequestToken
+        if let cachedPage = service.cachedHistory(peerID: conversation.id, offset: 1, count: pageSize, startMessageID: boundaryID, reverse: false),
+           isValidBoundaryPage(cachedPage, boundaryID: boundaryID, newer: false) {
+            insertOlder(cachedPage)
+            isLoadingOlder = false
+            return true
         }
-        service.fetchHistory(peerID: conversation.id, offset: requestedOffset, count: pageSize) { [weak self] result in
-            guard let self else { return }
+        service.fetchHistory(peerID: conversation.id, offset: 1, count: pageSize, startMessageID: boundaryID, reverse: false) { [weak self] result in
+            guard let self, self.historyRequestToken == requestToken else { return }
             if case .success(let page) = result {
-                self.insertOlder(page, requestedOffset: requestedOffset, preserving: message.id)
+                guard self.isValidBoundaryPage(page, boundaryID: boundaryID, newer: false) else {
+                    self.isLoadingOlder = false
+                    return
+                }
+                self.insertOlder(page)
+                self.isLoadingOlder = false
+                return
             }
             self.isLoadingOlder = false
         }
+        return true
+    }
+
+    @discardableResult
+    func loadNewerIfNeeded() -> Bool {
+        guard historyAnchorID != nil, let newestID = newestLoadedMessageID,
+              !isLoading, !isLoadingOlder, !isLoadingNewer,
+              pendingScrollRequestID == nil else { return false }
+        isLoadingNewer = true
+        let requestToken = historyRequestToken
+        if let cachedPage = service.cachedHistory(peerID: conversation.id, offset: 1, count: pageSize, startMessageID: newestID, reverse: true),
+           isValidBoundaryPage(cachedPage, boundaryID: newestID, newer: true),
+           cachedPage.count > cachedPage.messages.count + 1 {
+            insertNewer(cachedPage)
+            isLoadingNewer = false
+            return true
+        }
+        service.fetchHistory(peerID: conversation.id, offset: 1, count: pageSize, startMessageID: newestID, reverse: true) { [weak self] result in
+            guard let self, self.historyRequestToken == requestToken else { return }
+            switch result {
+            case .success(let page):
+                if self.isValidBoundaryPage(page, boundaryID: newestID, newer: true) {
+                    self.insertNewer(page)
+                }
+            case .failure(let error): self.errorMessage = error.localizedDescription
+            }
+            self.isLoadingNewer = false
+        }
+        return true
     }
 
     func send(text: String, replyTo: Int? = nil) {
@@ -213,32 +301,77 @@ final class ChatViewModel: ObservableObject {
     }
 
     func rememberPosition(messageID: Int) {
-        guard messageID > 0, messageID != lastRememberedMessageID else { return }
-        guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+        guard !isLoading, pendingScrollRequestID == nil,
+              messageID > 0, messageID != lastRememberedMessageID,
+              messages.contains(where: { $0.id == messageID }) else { return }
+        visibleMessageID = messageID
         lastRememberedMessageID = messageID
-        let historyOffset = newestHistoryOffset + messages.count - index - 1
-        let position = SavedChatPosition(messageID: messageID, historyOffset: historyOffset)
-        if let data = try? JSONEncoder().encode(position) {
-            UserDefaults.standard.set(data, forKey: positionStorageKey)
+        cachePositionTask?.cancel()
+        cachePositionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.persistVisiblePosition()
         }
     }
 
+    func cacheCurrentPosition() {
+        cachePositionTask?.cancel()
+        cachePositionTask = nil
+        guard let messageID = visibleMessageID else { return }
+        persistVisiblePosition()
+        let loadedMessages = messages.filter { message in
+            message.id > 0 && (newestLoadedMessageID.map { message.id <= $0 } ?? true)
+        }
+        guard let index = loadedMessages.firstIndex(where: { $0.id == messageID }) else { return }
+
+        let newestIndex = min(loadedMessages.count - 1, index + pageSize / 2)
+        let oldestIndex = max(0, newestIndex - pageSize + 1)
+        let pageMessages = Array(loadedMessages[oldestIndex...newestIndex])
+        let newerLoadedCount = loadedMessages.count - newestIndex - 1
+        let pageCount = max(pageMessages.count, totalCount - newerLoadedCount)
+        let page = MessagesPage(count: pageCount, messages: pageMessages)
+        service.cacheHistory(
+            page: page,
+            peerID: conversation.id,
+            offset: -(pageSize / 2),
+            count: pageSize,
+            startMessageID: messageID,
+            reverse: false
+        )
+    }
+
+    private func persistVisiblePosition() {
+        guard let messageID = visibleMessageID,
+              let data = try? JSONEncoder().encode(SavedChatPosition(messageID: messageID)) else { return }
+        UserDefaults.standard.set(data, forKey: positionStorageKey)
+    }
+
     func updateIsNearBottom(_ value: Bool) {
-        isNearBottom = value
+        let newValue = historyAnchorID == nil && value
+        if isNearBottom != newValue { isNearBottom = newValue }
     }
 
     func scrollToBottom(animated: Bool = false) {
         unreadMessageCount = 0
-        requestScroll(.bottom(animated: animated))
-    }
-
-    func clearUnreadMessages() {
-        unreadMessageCount = 0
+        if historyAnchorID == nil {
+            requestScroll(.bottom(animated: animated))
+        } else {
+            loadLatest(animated: animated)
+        }
     }
 
     func scrollTo(messageID: Int) {
-        guard messages.contains(where: { $0.id == messageID }) else { return }
-        requestScroll(.message(messageID: messageID))
+        if messages.contains(where: { $0.id == messageID }) {
+            requestScroll(.message(messageID: messageID))
+        } else if messageID > 0 {
+            loadAround(messageID: messageID)
+        }
+    }
+
+    func completeScroll(requestID: Int) {
+        if pendingScrollRequestID == requestID {
+            pendingScrollRequestID = nil
+        }
     }
 
     var peerPresenceText: String? {
@@ -391,7 +524,7 @@ final class ChatViewModel: ObservableObject {
             $0.deliveryStatus == .sending || $0.deliveryStatus == .failed
         }
         return (loadedMessages + transientMessages)
-            .sorted { $0.date < $1.date }
+            .sorted(by: messageOrder)
     }
 
     private func mergingLoadedMessages(_ loadedMessages: [ChatMessage]) -> [ChatMessage] {
@@ -406,28 +539,151 @@ final class ChatViewModel: ObservableObject {
             $0.deliveryStatus == .sending || $0.deliveryStatus == .failed
         }
         return (Array(messagesByID.values) + transientMessages)
-            .sorted { $0.date < $1.date }
+            .sorted(by: messageOrder)
     }
 
-    private func applyCachedPage(_ page: MessagesPage, initialOffset: Int, savedMessageID: Int?) {
+    private func messageOrder(_ first: ChatMessage, _ second: ChatMessage) -> Bool {
+        if first.id > 0 && second.id > 0 { return first.id < second.id }
+        if first.date != second.date { return first.date < second.date }
+        return first.id < second.id
+    }
+
+    private func applyCachedPage(_ page: MessagesPage, anchorID: Int?, savedMessageID: Int?) {
         messages = mergingTransientMessages(into: page.messages)
         didLoadMessages = true
-        newestHistoryOffset = initialOffset
-        offset = initialOffset + page.messages.count
+        historyAnchorID = olderHistoryAnchor(for: page, requestedAnchor: anchorID)
+        newestLoadedMessageID = page.messages.last?.id
+        isNearBottom = historyAnchorID == nil
+        offset = page.messages.count
         totalCount = page.count
         hasMore = offset < totalCount && !page.messages.isEmpty
         prefetchMedia(for: page.messages)
         requestScroll(.initial(messageID: savedMessageID))
     }
 
-    private func insertOlder(_ page: MessagesPage, requestedOffset: Int, preserving messageID: Int) {
-        let existing = Set(messages.map(\.id))
-        messages.insert(contentsOf: page.messages.filter { !existing.contains($0.id) }, at: 0)
-        offset = requestedOffset + page.messages.count
+    private func olderHistoryAnchor(for page: MessagesPage, requestedAnchor: Int?) -> Int? {
+        guard requestedAnchor != nil, let newestID = page.messages.last?.id else { return nil }
+        return newestID
+    }
+
+    private func loadLatestAfterMissingAnchor() {
+        UserDefaults.standard.removeObject(forKey: positionStorageKey)
+        lastRememberedMessageID = nil
+        loadLatest(animated: false)
+    }
+
+    private func loadLatest(animated: Bool) {
+        isLoading = true
+        isLoadingOlder = false
+        isLoadingNewer = false
+        historyRequestToken &+= 1
+        let requestToken = historyRequestToken
+        if let cachedPage = service.cachedHistory(peerID: conversation.id, offset: 0, count: pageSize, startMessageID: nil, reverse: false) {
+            messages = mergingTransientMessages(into: cachedPage.messages)
+            didLoadMessages = true
+            historyAnchorID = nil
+            newestLoadedMessageID = cachedPage.messages.last?.id
+            isNearBottom = true
+            offset = cachedPage.messages.count
+            totalCount = cachedPage.count
+            hasMore = offset < totalCount && !cachedPage.messages.isEmpty
+            requestScroll(.bottom(animated: animated))
+        }
+        service.fetchHistory(peerID: conversation.id, offset: 0, count: pageSize, startMessageID: nil, reverse: false) { [weak self] result in
+            guard let self, self.historyRequestToken == requestToken else { return }
+            switch result {
+            case .success(let page):
+                self.messages = self.mergingTransientMessages(into: page.messages)
+                self.didLoadMessages = true
+                self.historyAnchorID = nil
+                self.newestLoadedMessageID = page.messages.last?.id
+                self.isNearBottom = true
+                self.offset = page.messages.count
+                self.totalCount = page.count
+                self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
+                self.prefetchMedia(for: page.messages)
+                self.requestScroll(.bottom(animated: animated))
+                self.service.markAsRead(peerID: self.conversation.id)
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+            }
+            self.isLoading = false
+        }
+    }
+
+    private func loadAround(messageID: Int) {
+        isLoading = true
+        isLoadingOlder = false
+        isLoadingNewer = false
+        historyRequestToken &+= 1
+        let requestToken = historyRequestToken
+        let requestedOffset = -(pageSize / 2)
+        if let cachedPage = service.cachedHistory(peerID: conversation.id, offset: requestedOffset, count: pageSize, startMessageID: messageID, reverse: false),
+           cachedPage.messages.contains(where: { $0.id == messageID }) {
+            applyPageAround(cachedPage, messageID: messageID)
+        }
+        service.fetchHistory(peerID: conversation.id, offset: requestedOffset, count: pageSize, startMessageID: messageID, reverse: false) { [weak self] result in
+            guard let self, self.historyRequestToken == requestToken else { return }
+            switch result {
+            case .success(let page):
+                if page.messages.contains(where: { $0.id == messageID }) {
+                    self.applyPageAround(page, messageID: messageID)
+                }
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+            }
+            self.isLoading = false
+        }
+    }
+
+    private func applyPageAround(_ page: MessagesPage, messageID: Int) {
+        messages = mergingTransientMessages(into: page.messages)
+        historyAnchorID = olderHistoryAnchor(for: page, requestedAnchor: messageID)
+        newestLoadedMessageID = page.messages.last?.id
+        isNearBottom = historyAnchorID == nil
+        offset = page.messages.count
         totalCount = page.count
         hasMore = offset < totalCount && !page.messages.isEmpty
         prefetchMedia(for: page.messages)
-        requestScroll(.preservePosition(messageID: messageID))
+        requestScroll(.message(messageID: messageID))
+    }
+
+    private func insertOlder(_ page: MessagesPage) {
+        let existing = Set(messages.map(\.id))
+        let newMessages = page.messages.filter { !existing.contains($0.id) }
+        messages.insert(contentsOf: newMessages, at: 0)
+        offset += newMessages.count
+        hasMore = page.count > page.messages.count + 1 && !page.messages.isEmpty
+        prefetchMedia(for: page.messages)
+    }
+
+    private func insertNewer(_ page: MessagesPage) {
+        let existingIDs = Set(messages.map(\.id))
+        let uniqueMessages = page.messages.filter { !existingIDs.contains($0.id) }
+        if !uniqueMessages.isEmpty {
+            messages.append(contentsOf: uniqueMessages)
+            messages.sort(by: messageOrder)
+            prefetchMedia(for: uniqueMessages)
+        }
+        newestLoadedMessageID = page.messages.last?.id ?? newestLoadedMessageID
+        totalCount += page.messages.count
+        if page.count <= page.messages.count + 1 {
+            historyAnchorID = nil
+            offset = messages.filter { $0.id > 0 }.count
+            hasMore = offset < totalCount
+            service.markAsRead(peerID: conversation.id)
+        }
+    }
+
+    private func isValidBoundaryPage(_ page: MessagesPage, boundaryID: Int, newer: Bool) -> Bool {
+        guard page.messages.count <= pageSize,
+              page.count >= page.messages.count + 1 else { return false }
+        for (index, message) in page.messages.enumerated() {
+            guard message.id > 0,
+                  (newer ? message.id > boundaryID : message.id < boundaryID) else { return false }
+            if index > 0 && page.messages[index - 1].id >= message.id { return false }
+        }
+        return true
     }
 
     private func prefetchMedia(for messages: [ChatMessage]) {
@@ -436,7 +692,9 @@ final class ChatViewModel: ObservableObject {
                 + message.photos.map(\.url)
                 + message.videos.compactMap(\.thumbnailURL)
         }
-        ImageCache.shared.prefetchPermanently(urls)
+        DispatchQueue.global(qos: .utility).async {
+            ImageCache.shared.prefetchPermanently(urls)
+        }
     }
 
     private func prefetchStickerMedia(for packs: [VKStickerPack]) {
@@ -449,6 +707,7 @@ final class ChatViewModel: ObservableObject {
     private func requestScroll(_ request: ChatScrollRequest) {
         scrollRequest = request
         scrollRequestID &+= 1
+        pendingScrollRequestID = scrollRequestID
     }
 
     private func savedPosition() -> SavedChatPosition? {
@@ -457,7 +716,7 @@ final class ChatViewModel: ObservableObject {
             return position
         }
         if let messageID = UserDefaults.standard.object(forKey: positionStorageKey) as? Int {
-            return SavedChatPosition(messageID: messageID, historyOffset: 0)
+            return SavedChatPosition(messageID: messageID)
         }
         return nil
     }

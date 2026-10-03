@@ -5,9 +5,9 @@ import UIKit
 
 struct ChatView: View {
     let conversation: Conversation
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel: ChatViewModel
     @State private var text = ""
-    @State private var composerHeight: CGFloat = 40
     @State private var legacyTextHeight: CGFloat = 36
     @State private var isEmojiPanelPresented = false
     @State private var recentStickers: [VKSticker] = []
@@ -23,35 +23,25 @@ struct ChatView: View {
 
     init(
         conversation: Conversation,
+        viewModel: ChatViewModel? = nil,
         selectedMedia: Binding<Attachment?> = .constant(nil),
         owningPost: Binding<Post?> = .constant(nil)
     ) {
         self.conversation = conversation
-        _viewModel = StateObject(wrappedValue: ChatViewModel(conversation: conversation))
+        _viewModel = StateObject(wrappedValue: viewModel ?? ChatViewModel(conversation: conversation))
         _selectedMedia = selectedMedia
         _owningPost = owningPost
     }
 
     var body: some View {
         GeometryReader { geometry in
-                messageHistory(
-                    viewportHeight: max(0, geometry.size.height - composerHeight),
-                    viewportWidth: geometry.size.width
-                )
+                tableMessageHistory(viewportWidth: geometry.size.width)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if #available(iOS 26.0, *) {
                         if viewModel.canSendMessages {
                             messageComposer(maxHeight: geometry.size.height / 2)
                                 .padding(.horizontal, 12)
                                 .padding(.bottom, 8)
-                                .background(
-                                    GeometryReader { composerGeometry in
-                                        Color.clear.preference(
-                                            key: ComposerHeightPreferenceKey.self,
-                                            value: composerGeometry.size.height
-                                        )
-                                    }
-                                )
                         } else {
                             Text("Вы больше не можете отправлять сообщения")
                                 .font(.footnote)
@@ -63,14 +53,6 @@ struct ChatView: View {
                         }
                     } else if viewModel.canSendMessages {
                         legacyMessageComposer
-                            .background(
-                                GeometryReader { composerGeometry in
-                                    Color.clear.preference(
-                                        key: ComposerHeightPreferenceKey.self,
-                                        value: composerGeometry.size.height
-                                    )
-                                }
-                            )
                     } else {
                         Text("Вы больше не можете отправлять сообщения")
                             .font(.footnote)
@@ -83,7 +65,6 @@ struct ChatView: View {
             ChatWallpaperBackground()
                 .ignoresSafeArea()
         }
-        .onPreferenceChange(ComposerHeightPreferenceKey.self) { composerHeight = $0 }
         .onChange(of: text) { viewModel.sendTyping(for: $0) }
         .onAppear {
             if #unavailable(iOS 16.0) {
@@ -91,9 +72,13 @@ struct ChatView: View {
             }
         }
         .onDisappear {
+            viewModel.cacheCurrentPosition()
             if #unavailable(iOS 16.0) {
                 LegacyChatTabBarHider.setTabBarHidden(false)
             }
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { viewModel.cacheCurrentPosition() }
         }
         .navigationBarTitleDisplayMode(.inline)
         .chatNavigationBarTransparent()
@@ -200,141 +185,80 @@ struct ChatView: View {
         return "участников"
     }
 
-    private func messageHistory(viewportHeight: CGFloat, viewportWidth: CGFloat) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    if viewModel.isLoadingOlder { ProgressView().padding(8) }
-                    ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
-                        MessageBubble(
-                            message: message,
-                            isChat: conversation.isChat,
-                            viewportWidth: viewportWidth,
-                            showsSenderDetails: shouldShowSenderDetails(for: index),
-                            joinsPrevious: joinsMessage(at: index, with: index - 1),
-                            joinsNext: joinsMessage(at: index, with: index + 1)
-                        ) { photo in
-                            openPhotoViewer(for: photo)
-                        } onVideoTap: { video in
-                            selectedVideo = video
-                        } onProfileTap: { user in
-                            profileToShow = user
-                        } onMentionTap: { username in
-                            openProfile(forMention: username)
-                        } onReply: { message in
+    private func tableMessageHistory(viewportWidth: CGFloat) -> some View {
+        ChatTableHistory(
+            messages: viewModel.messages,
+            pageSize: viewModel.pageSize,
+            scrollRequest: viewModel.scrollRequest,
+            scrollRequestID: viewModel.scrollRequestID,
+            rowContent: { index in
+                let message = viewModel.messages[index]
+                return AnyView(
+                    MessageBubble(
+                        message: message,
+                        isChat: conversation.isChat,
+                        viewportWidth: viewportWidth,
+                        showsSenderDetails: shouldShowSenderDetails(for: index),
+                        joinsPrevious: joinsMessage(at: index, with: index - 1),
+                        joinsNext: joinsMessage(at: index, with: index + 1),
+                        onPhotoTap: { openPhotoViewer(for: $0) },
+                        onVideoTap: { selectedVideo = $0 },
+                        onProfileTap: { profileToShow = $0 },
+                        onMentionTap: { openProfile(forMention: $0) },
+                        onReply: { message in
                             replyToMessage = message
                             editingMessage = nil
                             isComposerFocused = true
-                        } onReplyTap: { reply in
-                            viewModel.scrollTo(messageID: reply.messageID)
-                        } onEdit: { message in
+                        },
+                        onReplyTap: { viewModel.scrollTo(messageID: $0.messageID) },
+                        onEdit: { message in
                             editingMessage = message
                             replyToMessage = nil
                             text = message.text
                             isComposerFocused = true
-                        } onDelete: { message in
-                            messageToDelete = message
-                        }
-                            .id(message.id)
-                            .onAppear { viewModel.loadOlderIfNeeded(message: message) }
-                            .background(
-                                GeometryReader { messageGeometry in
-                                    Color.clear.preference(
-                                        key: ChatMessageFramePreferenceKey.self,
-                                        value: [message.id: messageGeometry.frame(in: .named("chat-history"))]
-                                    )
-                                }
-                            )
-                    }
-                    if viewModel.isLoading && viewModel.messages.isEmpty { ProgressView().padding(.top, 30) }
-                    Color.clear
-                        .frame(height: 1)
-                        .id("chat-bottom")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-            .chatScrollKeyboardDismissal()
-            .simultaneousGesture(TapGesture().onEnded {
-                dismissChatKeyboard()
-            })
-            .overlay(alignment: .bottomTrailing) {
-                if !viewModel.isNearBottom {
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo("chat-bottom", anchor: .bottom)
-                        }
-                        viewModel.clearUnreadMessages()
-                    } label: {
-                        ZStack {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 17, weight: .bold))
-                            if viewModel.unreadMessageCount > 0 {
-                                Text("\(viewModel.unreadMessageCount)")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(4)
-                                    .background(Color.appAccent, in: Circle())
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                                    .offset(x: 7, y: -7)
-                            }
-                        }
-                        .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    .chatJumpButtonGlass()
-                    .contentShape(Circle())
-                    .zIndex(1)
-                    .accessibilityLabel(
-                        viewModel.unreadMessageCount > 0
-                            ? "К непрочитанным сообщениям: \(viewModel.unreadMessageCount)"
-                            : "К последним сообщениям"
+                        },
+                        onDelete: { messageToDelete = $0 }
                     )
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 12)
-                }
-            }
-            .coordinateSpace(name: "chat-history")
-            .onPreferenceChange(ChatMessageFramePreferenceKey.self) { frames in
-                let visibleMessage = frames
-                    .filter { $0.value.maxY > 0 && $0.value.minY < viewportHeight }
-                    .min { $0.value.minY < $1.value.minY }
-                if let messageID = visibleMessage?.key {
-                    viewModel.rememberPosition(messageID: messageID)
-                }
-                if let lastMessageID = viewModel.messages.last?.id,
-                   let lastFrame = frames[lastMessageID] {
-                    viewModel.updateIsNearBottom(lastFrame.maxY <= viewportHeight + 32)
-                } else if !viewModel.messages.isEmpty {
-                    viewModel.updateIsNearBottom(false)
-                }
-            }
-            .onChange(of: viewModel.scrollRequestID) { _ in
-                Task { @MainActor in
-                    await Task.yield()
-                    await Task.yield()
-                    switch viewModel.scrollRequest {
-                    case .initial(let savedMessageID):
-                        if let savedMessageID,
-                           viewModel.messages.contains(where: { $0.id == savedMessageID }) {
-                            proxy.scrollTo(savedMessageID, anchor: .top)
-                        } else {
-                            proxy.scrollTo("chat-bottom", anchor: .bottom)
-                        }
-                    case .preservePosition(let messageID):
-                        proxy.scrollTo(messageID, anchor: .top)
-                    case .message(let messageID):
-                        proxy.scrollTo(messageID, anchor: .center)
-                    case .bottom(let animated):
-                        if animated {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo("chat-bottom", anchor: .bottom)
-                            }
-                        } else {
-                            proxy.scrollTo("chat-bottom", anchor: .bottom)
+                    .id(message.id)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 1)
+                )
+            },
+            onVisible: { id, nearBottom in
+                viewModel.rememberPosition(messageID: id)
+                viewModel.updateIsNearBottom(nearBottom)
+            },
+            canLoadOlder: { viewModel.canLoadOlderPage },
+            canLoadNewer: { viewModel.canLoadNewerPage },
+            onLoadOlder: { viewModel.loadOlderIfNeeded(message: $0) },
+            onLoadNewer: { viewModel.loadNewerIfNeeded() },
+            onScrollCompleted: { viewModel.completeScroll(requestID: $0) },
+            onTapBackground: dismissChatKeyboard
+        )
+        .overlay(alignment: .bottomTrailing) {
+            if !viewModel.isNearBottom {
+                Button {
+                    viewModel.scrollToBottom(animated: true)
+                } label: {
+                    ZStack {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 17, weight: .bold))
+                        if viewModel.unreadMessageCount > 0 {
+                            Text("\(viewModel.unreadMessageCount)")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(4)
+                                .background(Color.appAccent, in: Circle())
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                                .offset(x: 7, y: -7)
                         }
                     }
+                    .frame(width: 44, height: 44)
                 }
+                .buttonStyle(.plain)
+                .chatJumpButtonGlass()
+                .padding(.trailing, 16)
+                .padding(.bottom, 12)
             }
         }
     }
@@ -654,11 +578,391 @@ struct ChatView: View {
 
 }
 
-private struct ChatMessageFramePreferenceKey: PreferenceKey {
-    static var defaultValue: [Int: CGRect] = [:]
+private struct ChatTableHistory: UIViewRepresentable {
+    let messages: [ChatMessage]
+    let pageSize: Int
+    let scrollRequest: ChatScrollRequest
+    let scrollRequestID: Int
+    let rowContent: (Int) -> AnyView
+    let onVisible: (Int, Bool) -> Void
+    let canLoadOlder: () -> Bool
+    let canLoadNewer: () -> Bool
+    let onLoadOlder: (ChatMessage) -> Bool
+    let onLoadNewer: () -> Bool
+    let onScrollCompleted: (Int) -> Void
+    let onTapBackground: () -> Void
 
-    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, newest in newest })
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIView(context: Context) -> UITableView {
+        let table = UITableView(frame: .zero, style: .plain)
+        table.dataSource = context.coordinator
+        table.delegate = context.coordinator
+        table.register(ChatMessageTableCell.self, forCellReuseIdentifier: ChatMessageTableCell.reuseID)
+        table.backgroundColor = .clear
+        table.separatorStyle = .none
+        table.showsVerticalScrollIndicator = false
+        table.rowHeight = UITableView.automaticDimension
+        table.estimatedRowHeight = 56
+        table.contentInset = UIEdgeInsets(top: 10, left: 0, bottom: 10, right: 0)
+        table.contentInsetAdjustmentBehavior = .never
+        table.keyboardDismissMode = .interactive
+        table.tableFooterView = UIView(frame: .zero)
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTapBackground))
+        tap.cancelsTouchesInView = false
+        table.addGestureRecognizer(tap)
+        context.coordinator.tableView = table
+        return table
+    }
+
+    func updateUIView(_ table: UITableView, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.apply(to: table)
+    }
+
+    final class Coordinator: NSObject, UITableViewDataSource, UITableViewDelegate {
+        var parent: ChatTableHistory
+        weak var tableView: UITableView?
+        private var displayedMessages: [ChatMessage] = []
+        private var lastHandledScrollRequestID = 0
+        private var lastWidth: CGFloat = 0
+        private var lastUserOffsetY: CGFloat = 0
+        private var scrollSequence = 0
+        private var suppressScrollCallbacks = false
+        private var pendingVisibleReport = false
+        private var measuredHeights: [Int: CGFloat] = [:]
+        private let loadGate = ChatPageLoadGate()
+
+        init(parent: ChatTableHistory) { self.parent = parent }
+
+        func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+            displayedMessages.count
+        }
+
+        func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: ChatMessageTableCell.reuseID, for: indexPath
+            ) as! ChatMessageTableCell
+            cell.configure(content: parent.rowContent(indexPath.row), parentController: tableView.chatParentController())
+            return cell
+        }
+
+        func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
+            guard displayedMessages.indices.contains(indexPath.row) else { return 56 }
+            let message = displayedMessages[indexPath.row]
+            if let height = measuredHeights[message.id] { return height }
+            if message.stickerURL != nil { return 170 }
+            if !message.photos.isEmpty || !message.videos.isEmpty || !message.gifs.isEmpty { return 220 }
+            if !message.documents.isEmpty { return 100 }
+            if message.systemEventText != nil { return 48 }
+            return 56
+        }
+
+        func tableView(_ tableView: UITableView, willDisplay cell: UITableViewCell, forRowAt indexPath: IndexPath) {
+            guard displayedMessages.indices.contains(indexPath.row) else { return }
+            measuredHeights[displayedMessages[indexPath.row].id] = cell.bounds.height
+        }
+
+        func apply(to table: UITableView) {
+            let next = parent.messages
+            let oldIDs = displayedMessages.map(\.id)
+            let newIDs = next.map(\.id)
+            let oldAnchor = visibleAnchor(in: table)
+            suppressScrollCallbacks = true
+            if abs(lastWidth - table.bounds.width) > 1 { measuredHeights.removeAll() }
+            for (old, updated) in zip(displayedMessages, next) where old.id == updated.id && old != updated {
+                measuredHeights.removeValue(forKey: old.id)
+            }
+            if oldIDs.isEmpty {
+                displayedMessages = next
+                table.reloadData()
+            } else if newIDs != oldIDs,
+                      newIDs.count > oldIDs.count,
+                      Array(newIDs.suffix(oldIDs.count)) == oldIDs {
+                let insertedCount = newIDs.count - oldIDs.count
+                displayedMessages = next
+                UIView.performWithoutAnimation {
+                    table.beginUpdates()
+                    table.insertRows(at: (0..<insertedCount).map { IndexPath(row: $0, section: 0) }, with: .none)
+                    table.endUpdates()
+                    table.layoutIfNeeded()
+                    if let oldAnchor, let index = next.firstIndex(where: { $0.id == oldAnchor.id }) {
+                        restore(anchor: oldAnchor, at: index, in: table)
+                    }
+                }
+                refreshVisibleCells(in: table)
+            } else if newIDs != oldIDs,
+                      newIDs.count > oldIDs.count,
+                      Array(newIDs.prefix(oldIDs.count)) == oldIDs {
+                displayedMessages = next
+                UIView.performWithoutAnimation {
+                    table.beginUpdates()
+                    table.insertRows(
+                        at: (oldIDs.count..<newIDs.count).map { IndexPath(row: $0, section: 0) },
+                        with: .none
+                    )
+                    table.endUpdates()
+                }
+                refreshVisibleCells(in: table)
+            } else if newIDs != oldIDs {
+                displayedMessages = next
+                table.reloadData()
+                table.layoutIfNeeded()
+                if let oldAnchor, let newIndex = next.firstIndex(where: { $0.id == oldAnchor.id }) {
+                    restore(anchor: oldAnchor, at: newIndex, in: table)
+                }
+            } else if displayedMessages != next || abs(lastWidth - table.bounds.width) > 1 {
+                displayedMessages = next
+                UIView.performWithoutAnimation {
+                    refreshVisibleCells(in: table)
+                    table.beginUpdates()
+                    table.endUpdates()
+                    table.layoutIfNeeded()
+                    if let oldAnchor, let index = next.firstIndex(where: { $0.id == oldAnchor.id }) {
+                        restore(anchor: oldAnchor, at: index, in: table)
+                    }
+                }
+            }
+            lastWidth = table.bounds.width
+            handleScrollRequest(in: table)
+            lastUserOffsetY = table.contentOffset.y
+            suppressScrollCallbacks = false
+            reportVisiblePosition(in: table)
+        }
+
+        private func refreshVisibleCells(in table: UITableView) {
+            for indexPath in table.indexPathsForVisibleRows ?? [] {
+                guard displayedMessages.indices.contains(indexPath.row),
+                      let cell = table.cellForRow(at: indexPath) as? ChatMessageTableCell else { continue }
+                cell.configure(content: parent.rowContent(indexPath.row), parentController: table.chatParentController())
+            }
+        }
+
+        private func visibleAnchor(in table: UITableView) -> (id: Int, y: CGFloat)? {
+            guard let index = table.indexPathsForVisibleRows?.map(\.row).min(),
+                  displayedMessages.indices.contains(index) else { return nil }
+            let y = table.rectForRow(at: IndexPath(row: index, section: 0)).minY - table.contentOffset.y
+            return (displayedMessages[index].id, y)
+        }
+
+        private func restore(anchor: (id: Int, y: CGFloat), at index: Int, in table: UITableView) {
+            let rect = table.rectForRow(at: IndexPath(row: index, section: 0))
+            let target = rect.minY - anchor.y
+            table.setContentOffset(CGPoint(x: table.contentOffset.x, y: target), animated: false)
+        }
+
+        private func handleScrollRequest(in table: UITableView) {
+            let requestID = parent.scrollRequestID
+            guard requestID != 0,
+                  requestID != lastHandledScrollRequestID,
+                  !displayedMessages.isEmpty else { return }
+            let row: Int
+            let position: UITableView.ScrollPosition
+            let animated: Bool
+            switch parent.scrollRequest {
+            case .initial(let savedID):
+                row = savedID.flatMap { id in displayedMessages.firstIndex(where: { $0.id == id }) }
+                    ?? displayedMessages.count - 1
+                position = savedID == nil ? .bottom : .top
+                animated = false
+            case .message(let id):
+                guard let index = displayedMessages.firstIndex(where: { $0.id == id }) else { return }
+                row = index
+                position = .middle
+                animated = false
+            case .bottom(let shouldAnimate):
+                row = displayedMessages.count - 1
+                position = .bottom
+                animated = shouldAnimate
+            }
+            lastHandledScrollRequestID = requestID
+            table.layoutIfNeeded()
+            table.scrollToRow(at: IndexPath(row: row, section: 0), at: position, animated: animated)
+            parent.onScrollCompleted(requestID)
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            lastUserOffsetY = scrollView.contentOffset.y
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard !suppressScrollCallbacks,
+                  let table = tableView,
+                  !displayedMessages.isEmpty else { return }
+            reportVisiblePosition(in: table)
+            let currentY = scrollView.contentOffset.y
+            let movement = currentY - lastUserOffsetY
+            lastUserOffsetY = currentY
+            guard (scrollView.isDragging || scrollView.isDecelerating), abs(movement) > 1 else { return }
+            scrollSequence &+= 1
+            let direction: ChatScrollDirection = movement < 0 ? .older : .newer
+            let userScroll = ChatUserScroll(direction: direction, sequence: scrollSequence)
+            guard let visible = table.indexPathsForVisibleRows, !visible.isEmpty else { return }
+            let firstVisible = visible.map(\.row).min() ?? 0
+            let lastVisible = visible.map(\.row).max() ?? 0
+            if let first = displayedMessages.first,
+               parent.canLoadOlder(),
+               loadGate.shouldLoadOlder(
+                   boundaryID: first.id,
+                   pageVisible: firstVisible < parent.pageSize,
+                   userScroll: userScroll
+               ) {
+                loadGate.didStartOlder(boundaryID: first.id, sequence: scrollSequence)
+                let callback = parent.onLoadOlder
+                DispatchQueue.main.async { [weak self] in
+                    if !callback(first) { self?.loadGate.cancelOlder(boundaryID: first.id) }
+                }
+            }
+            if let last = displayedMessages.last,
+               parent.canLoadNewer(),
+               loadGate.shouldLoadNewer(
+                   boundaryID: last.id,
+                   pageVisible: lastVisible >= max(0, displayedMessages.count - parent.pageSize),
+                   userScroll: userScroll
+               ) {
+                loadGate.didStartNewer(boundaryID: last.id, sequence: scrollSequence)
+                let callback = parent.onLoadNewer
+                DispatchQueue.main.async { [weak self] in
+                    if !callback() { self?.loadGate.cancelNewer(boundaryID: last.id) }
+                }
+            }
+        }
+
+        private func reportVisiblePosition(in table: UITableView) {
+            guard !pendingVisibleReport else { return }
+            pendingVisibleReport = true
+            DispatchQueue.main.async { [weak self, weak table] in
+                guard let self, let table else { return }
+                self.pendingVisibleReport = false
+                guard let first = table.indexPathsForVisibleRows?.map(\.row).min(),
+                      self.displayedMessages.indices.contains(first) else { return }
+                let nearBottom = table.contentOffset.y + table.bounds.height >= table.contentSize.height - 32
+                self.parent.onVisible(self.displayedMessages[first].id, nearBottom)
+            }
+        }
+
+        @objc func didTapBackground() { parent.onTapBackground() }
+    }
+}
+
+private final class ChatMessageTableCell: UITableViewCell {
+    static let reuseID = "chat-message"
+    private var host: UIHostingController<AnyView>?
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        selectionStyle = .none
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func systemLayoutSizeFitting(
+        _ targetSize: CGSize,
+        withHorizontalFittingPriority horizontalFittingPriority: UILayoutPriority,
+        verticalFittingPriority: UILayoutPriority
+    ) -> CGSize {
+        let width = max(targetSize.width, contentView.bounds.width, superview?.bounds.width ?? 0)
+        guard let host, width > 0 else {
+            return super.systemLayoutSizeFitting(
+                targetSize,
+                withHorizontalFittingPriority: horizontalFittingPriority,
+                verticalFittingPriority: verticalFittingPriority
+            )
+        }
+        let size = host.sizeThatFits(in: CGSize(width: width, height: .infinity))
+        let safeAreaHeight = host.view.safeAreaInsets.top + host.view.safeAreaInsets.bottom
+        return CGSize(width: width, height: max(1, ceil(size.height - safeAreaHeight)))
+    }
+
+    func configure(content: AnyView, parentController: UIViewController?) {
+        if let host {
+            if host.parent == nil, let parentController {
+                parentController.addChild(host)
+                host.didMove(toParent: parentController)
+            }
+            host.rootView = AnyView(content.ignoresSafeArea())
+            host.view.invalidateIntrinsicContentSize()
+            return
+        }
+        let host = UIHostingController(rootView: AnyView(content.ignoresSafeArea()))
+        host.view.backgroundColor = .clear
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        parentController?.addChild(host)
+        contentView.addSubview(host.view)
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: contentView.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        ])
+        if parentController != nil { host.didMove(toParent: parentController) }
+        self.host = host
+    }
+}
+
+private extension UIView {
+    func chatParentController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController { return controller }
+            responder = current.next
+        }
+        return nil
+    }
+}
+
+enum ChatScrollDirection {
+    case older
+    case newer
+}
+
+struct ChatUserScroll {
+    let direction: ChatScrollDirection
+    let sequence: Int
+}
+
+final class ChatPageLoadGate {
+    private var lastOlderBoundaryID: Int?
+    private var lastNewerBoundaryID: Int?
+    private var lastOlderSequence = 0
+    private var lastNewerSequence = 0
+
+    func shouldLoadOlder(boundaryID: Int, pageVisible: Bool, userScroll: ChatUserScroll?) -> Bool {
+        guard pageVisible else {
+            if lastOlderBoundaryID == boundaryID { lastOlderBoundaryID = nil }
+            return false
+        }
+        guard let userScroll, userScroll.direction == .older else { return false }
+        return boundaryID != lastOlderBoundaryID && userScroll.sequence > lastOlderSequence
+    }
+
+    func shouldLoadNewer(boundaryID: Int, pageVisible: Bool, userScroll: ChatUserScroll?) -> Bool {
+        guard pageVisible else {
+            if lastNewerBoundaryID == boundaryID { lastNewerBoundaryID = nil }
+            return false
+        }
+        guard let userScroll, userScroll.direction == .newer else { return false }
+        return boundaryID != lastNewerBoundaryID && userScroll.sequence > lastNewerSequence
+    }
+
+    func didStartOlder(boundaryID: Int, sequence: Int) {
+        lastOlderBoundaryID = boundaryID
+        lastOlderSequence = sequence
+    }
+
+    func didStartNewer(boundaryID: Int, sequence: Int) {
+        lastNewerBoundaryID = boundaryID
+        lastNewerSequence = sequence
+    }
+
+    func cancelOlder(boundaryID: Int) {
+        if lastOlderBoundaryID == boundaryID { lastOlderBoundaryID = nil }
+    }
+
+    func cancelNewer(boundaryID: Int) {
+        if lastNewerBoundaryID == boundaryID { lastNewerBoundaryID = nil }
     }
 }
 
@@ -965,22 +1269,6 @@ private struct TypingStatusView: View {
     }
 }
 
-private struct ComposerHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 40
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct BubbleContentWidthPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 private struct ChatMentionText: View {
     let text: String
     let isOutgoing: Bool
@@ -990,6 +1278,7 @@ private struct ChatMentionText: View {
     var body: some View {
         Text(attributedText)
             .font(.system(size: 16))
+            .fixedSize(horizontal: false, vertical: true)
             .foregroundStyle(isOutgoing ? .white : (isDeleted ? .secondary : .primary))
             .environment(\.openURL, OpenURLAction { url in
                 guard url.scheme == "openvk-profile", let username = url.host else {
@@ -1060,7 +1349,6 @@ private struct MessageBubble: View {
     let onEdit: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
     @State private var swipeOffset: CGFloat = 0
-    @State private var measuredContentWidth: CGFloat = 0
 
     var body: some View {
         Group {
@@ -1380,33 +1668,24 @@ private struct MessageBubble: View {
                 isOutgoing: message.isOutgoing
             )
         )
-        .background(naturalContentWidthMeasurement)
-        .onPreferenceChange(BubbleContentWidthPreferenceKey.self) {
-            measuredContentWidth = $0
-        }
     }
 
     private var bubbleContentWidth: CGFloat {
-        min(measuredContentWidth, maximumBubbleContentWidth)
-    }
-
-    private var naturalContentWidthMeasurement: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if let reply = message.reply {
-                replyPreview(reply, width: 0)
-            }
-            messageTextAndMetadata
+        let text = message.isDeleted ? "Сообщение удалено" : message.text
+        let textWidth = text.components(separatedBy: .newlines)
+            .map { ($0 as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 16)]).width }
+            .max() ?? 0
+        let replyWidth: CGFloat
+        if let reply = message.reply {
+            let font = UIFont.systemFont(ofSize: 12)
+            replyWidth = max(
+                (reply.senderName as NSString).size(withAttributes: [.font: font]).width,
+                (reply.text as NSString).size(withAttributes: [.font: font]).width
+            ) + 24
+        } else {
+            replyWidth = 0
         }
-        .fixedSize(horizontal: true, vertical: false)
-            .hidden()
-            .background(
-                GeometryReader { geometry in
-                    Color.clear.preference(
-                        key: BubbleContentWidthPreferenceKey.self,
-                        value: geometry.size.width
-                    )
-                }
-            )
+        return min(maximumBubbleContentWidth, ceil(max(textWidth + metadataSlotWidth + 4, replyWidth)))
     }
 
     private var maximumBubbleContentWidth: CGFloat {
