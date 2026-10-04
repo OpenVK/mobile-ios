@@ -23,6 +23,7 @@ struct AudioListView: View {
     @EnvironmentObject private var auth: AuthService
     @StateObject private var viewModel = AudioLibraryViewModel()
     @ObservedObject private var player = AudioPlayerService.shared
+    @ObservedObject private var connection = ConnectionStatusService.shared
     @State private var searchQuery = ""
     @State private var selectedTab: AudioLibraryTab = .mine
 
@@ -32,6 +33,10 @@ struct AudioListView: View {
 
     private var isSearching: Bool {
         !trimmedSearchQuery.isEmpty
+    }
+
+    private var showsDownloadedMusic: Bool {
+        connection.issue != nil || viewModel.isNetworkUnavailable
     }
 
     private var displayedTracks: [AudioTrack] {
@@ -57,6 +62,80 @@ struct AudioListView: View {
     }
 
     var body: some View {
+        musicContent
+            .onAppear(perform: loadIfNeeded)
+            .onChange(of: connection.issue, perform: connectionChanged)
+            .onChange(of: selectedTab, perform: selectedTabChanged)
+            .onChange(of: searchQuery, perform: searchChanged)
+            .onReceive(NotificationCenter.default.publisher(for: .openvkAudioLibraryDidChange)) { _ in
+                reloadLibrary()
+            }
+    }
+
+    private var musicContent: some View {
+        Group {
+            if showsDownloadedMusic {
+                CachedAudioListView()
+            } else {
+                onlineContent
+            }
+        }
+        .navigationTitle(showsDownloadedMusic ? "Загруженная музыка" : "Музыка")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if showsDownloadedMusic {
+                    Button {
+                        retryConnection()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .accessibilityLabel("Проверить подключение")
+                } else {
+                    NavigationLink(destination: CachedAudioListView()) {
+                        Image(systemName: "arrow.down.circle")
+                    }
+                    .accessibilityLabel("Загруженная музыка")
+                }
+            }
+        }
+        .customBackButton(title: "Назад")
+    }
+
+    private func loadIfNeeded() {
+        guard let ownerID = auth.currentUser?.uid, !showsDownloadedMusic else { return }
+        viewModel.load(ownerID: ownerID)
+    }
+
+    private func reloadLibrary() {
+        guard let ownerID = auth.currentUser?.uid else { return }
+        viewModel.load(ownerID: ownerID, force: true)
+    }
+
+    private func retryConnection() {
+        connection.refresh()
+        reloadLibrary()
+    }
+
+    private func connectionChanged(_ issue: ConnectionStatusService.Issue?) {
+        if issue == nil { reloadLibrary() }
+    }
+
+    private func selectedTabChanged(_ tab: AudioLibraryTab) {
+        if tab == .popular && !isSearching && !showsDownloadedMusic {
+            viewModel.loadPopular()
+        }
+    }
+
+    private func searchChanged(_ query: String) {
+        viewModel.search(query: query)
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           selectedTab == .popular && !showsDownloadedMusic {
+            viewModel.loadPopular()
+        }
+    }
+
+    private var onlineContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
                 if !isSearching {
@@ -93,32 +172,9 @@ struct AudioListView: View {
             .padding(.bottom, player.currentTrack == nil ? 24 : 92)
         }
         .background(Color(.systemBackground))
-        .navigationTitle("Музыка")
-        .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchQuery, prompt: "Поиск по всей музыке")
-        .customBackButton(title: "Назад")
         .refreshable {
             await refresh()
-        }
-        .onAppear {
-            guard let ownerID = auth.currentUser?.uid else { return }
-            viewModel.load(ownerID: ownerID)
-        }
-        .onChange(of: selectedTab) { tab in
-            if tab == .popular && !isSearching {
-                viewModel.loadPopular()
-            }
-        }
-        .onChange(of: searchQuery) { query in
-            viewModel.search(query: query)
-            if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               selectedTab == .popular {
-                viewModel.loadPopular()
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openvkAudioLibraryDidChange)) { _ in
-            guard let ownerID = auth.currentUser?.uid else { return }
-            viewModel.load(ownerID: ownerID, force: true)
         }
     }
 
@@ -205,30 +261,6 @@ struct AudioListView: View {
 
     @ViewBuilder
     private var searchResultsSection: some View {
-        if !viewModel.searchPlaylists.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("ПЛЕЙЛИСТЫ")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: 12) {
-                        ForEach(viewModel.searchPlaylists) { playlist in
-                            NavigationLink(destination: AudioPlaylistDetailView(playlist: playlist)) {
-                                AudioPlaylistCard(playlist: playlist)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-            }
-        }
-
         VStack(alignment: .leading, spacing: 0) {
             Text("ТРЕКИ")
                 .font(.system(size: 13, weight: .bold))
@@ -318,7 +350,7 @@ private final class AudioLibraryViewModel: ObservableObject {
     @Published var tracks: [AudioTrack] = []
     @Published var popularTracks: [AudioTrack] = []
     @Published var searchResults: [AudioTrack] = []
-    @Published var searchPlaylists: [AudioPlaylist] = []
+    @Published var isNetworkUnavailable = false
     @Published var isLoading = false
     @Published var isLoadingPopular = false
     @Published var isLoadingMorePopular = false
@@ -349,6 +381,7 @@ private final class AudioLibraryViewModel: ObservableObject {
 
         let group = DispatchGroup()
         var firstError: String?
+        var tracksUnavailable = false
 
         group.enter()
         AudioService.shared.getPlaylists(ownerID: ownerID) { [weak self] result in
@@ -367,9 +400,12 @@ private final class AudioLibraryViewModel: ObservableObject {
             DispatchQueue.main.async {
                 if case .success(let tracks) = result {
                     self?.tracks = tracks
+                    self?.isNetworkUnavailable = false
                     AudioLibraryMembership.shared.seedAdded(tracks)
                 } else if case .failure(let error) = result {
                     firstError = firstError ?? error.localizedDescription
+                    if case .transport = error { tracksUnavailable = true }
+                    if case .http(let status) = error, status >= 500 { tracksUnavailable = true }
                 }
                 group.leave()
             }
@@ -378,6 +414,7 @@ private final class AudioLibraryViewModel: ObservableObject {
         group.notify(queue: .main) { [weak self] in
             self?.isLoading = false
             self?.errorMessage = firstError
+            if tracksUnavailable { self?.isNetworkUnavailable = true }
             completion?()
         }
     }
@@ -443,7 +480,6 @@ private final class AudioLibraryViewModel: ObservableObject {
 
         guard !trimmed.isEmpty else {
             searchResults = []
-            searchPlaylists = []
             isSearching = false
             searchOffset = 0
             hasMoreSearchResults = true
@@ -461,46 +497,23 @@ private final class AudioLibraryViewModel: ObservableObject {
             self.searchOffset = 0
             self.hasMoreSearchResults = true
             self.searchResults = []
-            self.searchPlaylists = []
             self.errorMessage = nil
-
-            let group = DispatchGroup()
-            var tracksError: String?
-
-            group.enter()
             AudioService.shared.searchTracks(query: trimmed, offset: 0, count: self.searchPageSize) { result in
                 DispatchQueue.main.async {
-                    guard generation == self.searchGeneration else { return }
+                    guard generation == self.searchGeneration else {
+                        completion?()
+                        return
+                    }
                     switch result {
                     case .success(let tracks):
                         self.searchResults = tracks
                         self.hasMoreSearchResults = tracks.count >= self.searchPageSize
                     case .failure(let error):
-                        tracksError = error.localizedDescription
+                        self.errorMessage = error.localizedDescription
                     }
-                    group.leave()
+                    self.isSearching = false
+                    completion?()
                 }
-            }
-
-            group.enter()
-            AudioService.shared.searchPlaylists(query: trimmed, offset: 0, count: 10) { result in
-                DispatchQueue.main.async {
-                    guard generation == self.searchGeneration else { return }
-                    switch result {
-                    case .success(let playlists):
-                        self.searchPlaylists = playlists
-                    case .failure:
-                        break
-                    }
-                    group.leave()
-                }
-            }
-
-            group.notify(queue: .main) {
-                guard generation == self.searchGeneration else { return }
-                self.errorMessage = tracksError
-                self.isSearching = false
-                completion?()
             }
         }
 
@@ -654,6 +667,7 @@ struct AudioTrackRow: View {
     let track: AudioTrack
     let queue: [AudioTrack]
     @ObservedObject private var player = AudioPlayerService.shared
+    @ObservedObject private var cache = AudioCacheService.shared
 
     private var isCurrent: Bool {
         guard let current = player.currentTrack else { return false }
@@ -696,9 +710,15 @@ struct AudioTrackRow: View {
 
                 Spacer()
 
-                Text(track.duration)
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
+                HStack(spacing: 5) {
+                    if cache.isCached(track) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .accessibilityLabel("Сохранено на устройстве")
+                    }
+                    Text(track.duration)
+                }
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
             }
             .padding(.vertical, 7)
             .contentShape(Rectangle())
@@ -713,6 +733,61 @@ struct AudioTrackRow: View {
         } else {
             player.play(track: track, in: queue)
         }
+    }
+}
+
+private struct CachedAudioListView: View {
+    @ObservedObject private var cache = AudioCacheService.shared
+    @State private var tracks: [AudioTrack] = []
+    @State private var isLoading = true
+
+    var body: some View {
+        ScrollView {
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 50)
+            } else if tracks.isEmpty {
+                CachedAudioEmptyState()
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(tracks) { track in
+                        AudioTrackRow(track: track, queue: tracks)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                .padding(.top, 8)
+                .padding(.bottom, 92)
+            }
+        }
+        .navigationTitle("Загруженная музыка")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: reload)
+        .onChange(of: cache.revision) { _ in reload() }
+    }
+
+    private func reload() {
+        cache.cachedTracks { cached in
+            tracks = cached
+            isLoading = false
+        }
+    }
+}
+
+private struct CachedAudioEmptyState: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 42))
+                .foregroundColor(.secondary)
+            Text("Загруженной музыки пока нет")
+                .font(.headline)
+            Text("Сохранённые треки появятся здесь")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 70)
     }
 }
 
@@ -1123,7 +1198,7 @@ struct GlobalAudioPlayerOverlay: View {
             alignment: .bottomLeading
         )
         .ignoresSafeArea()
-        .allowsHitTesting(player.currentTrack != nil)
+        .allowsHitTesting(player.currentTrack != nil && !player.isOverlayHidden)
     }
 
     private func expandPlayer() {
@@ -1696,6 +1771,9 @@ private struct ExpandedAudioPlayerControlsView: View {
     let track: AudioTrack
     @ObservedObject private var player = AudioPlayerService.shared
     @ObservedObject private var membership = AudioLibraryMembership.shared
+    @ObservedObject private var cache = AudioCacheService.shared
+    @State private var isDownloading = false
+    @State private var downloadError: String?
 
     private var currentTrack: AudioTrack {
         player.currentTrack ?? track
@@ -1798,6 +1876,31 @@ private struct ExpandedAudioPlayerControlsView: View {
                         .foregroundColor(membership.canMutate(currentTrack) ? .appAccent : .secondary)
 
                         Spacer()
+
+                        Button {
+                            guard !isDownloading, !cache.isCached(currentTrack) else { return }
+                            isDownloading = true
+                            cache.cache(currentTrack) { result in
+                                isDownloading = false
+                                if case .failure(let error) = result {
+                                    downloadError = error.localizedDescription
+                                }
+                            }
+                        } label: {
+                            Group {
+                                if isDownloading {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: cache.isCached(currentTrack) ? "checkmark.circle.fill" : "arrow.down.circle")
+                                        .font(.system(size: 24, weight: .semibold))
+                                }
+                            }
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .disabled(isDownloading || cache.isCached(currentTrack))
+                        .foregroundColor(cache.isCached(currentTrack) ? .secondary : .appAccent)
+                        .accessibilityLabel(cache.isCached(currentTrack) ? "Трек сохранён" : "Скачать трек")
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -1810,6 +1913,14 @@ private struct ExpandedAudioPlayerControlsView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
+        }
+        .alert("Не удалось скачать трек", isPresented: Binding(
+            get: { downloadError != nil },
+            set: { if !$0 { downloadError = nil } }
+        )) {
+            Button("ОК", role: .cancel) { downloadError = nil }
+        } message: {
+            Text(downloadError ?? "Попробуйте ещё раз")
         }
     }
 

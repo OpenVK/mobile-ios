@@ -143,6 +143,8 @@ struct ChatView: View {
         }
         .onChange(of: text) { viewModel.sendTyping(for: $0) }
         .onAppear {
+            AudioPlayerService.shared.isExpanded = false
+            AudioPlayerService.shared.isOverlayHidden = true
             if let userID = AuthService.shared.currentUser?.uid {
                 recentStickers = RecentStickerStore().load(userID: userID)
             }
@@ -151,6 +153,7 @@ struct ChatView: View {
             }
         }
         .onDisappear {
+            AudioPlayerService.shared.isOverlayHidden = false
             viewModel.cacheCurrentPosition()
             if #unavailable(iOS 16.0) {
                 LegacyChatTabBarHider.setTabBarHidden(false)
@@ -2234,6 +2237,7 @@ private struct ChatRichAttachmentCard: View {
     let onPhotoTap: (ChatPhoto) -> Void
     let onVideoTap: (ChatVideo) -> Void
     let onWallTap: (ChatWallPost) -> Void
+    @ObservedObject private var audioPlayer = AudioPlayerService.shared
 
     @ViewBuilder
     var body: some View {
@@ -2271,13 +2275,13 @@ private struct ChatRichAttachmentCard: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Видео: \(video.title)")
         case .audio(let audio):
-            Group {
-                if let url = audio.url {
-                    Link(destination: url) { audioLabel(audio) }
-                } else {
-                    audioLabel(audio)
-                }
+            Button {
+                let track = audio.track
+                audioPlayer.play(track: track, in: [track])
+            } label: {
+                audioLabel(audio)
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Аудиозапись: \(audio.artist), \(audio.title)")
         case .document(let document):
             ChatDocumentAttachmentCard(document: document)
@@ -2329,8 +2333,15 @@ private struct ChatRichAttachmentCard: View {
     }
 
     private func audioLabel(_ audio: ChatAudio) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "play.fill")
+        let isCurrent = audioPlayer.currentTrack.map { current in
+            if let ownerID = audio.ownerID, let vkID = audio.vkID {
+                return current.ownerID == ownerID && current.vkID == vkID
+            }
+            guard let url = audio.url?.absoluteString else { return false }
+            return current.url == url
+        } ?? false
+        return HStack(spacing: 10) {
+            Image(systemName: isCurrent && audioPlayer.isPlaying ? "pause.fill" : "play.fill")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(isOutgoing ? .white : Color.appAccent)
                 .frame(width: 38, height: 38)

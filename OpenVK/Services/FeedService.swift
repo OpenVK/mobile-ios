@@ -841,12 +841,13 @@ struct VKAudioAttachment: Decodable {
     let title: String?
     let duration: Int?
     let url: String?
+    let manifest: String?
     let added: Bool?
     let ready: Bool?
     let withdrawn: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case id, aid, artist, title, duration, url, added, ready, withdrawn
+        case id, aid, artist, title, duration, url, manifest, added, ready, withdrawn
         case ownerID = "owner_id"
         case ownerIDCamel = "ownerId"
     }
@@ -861,6 +862,7 @@ struct VKAudioAttachment: Decodable {
         title = try? container.decode(String.self, forKey: .title)
         duration = try? container.decode(Int.self, forKey: .duration)
         url = try? container.decode(String.self, forKey: .url)
+        manifest = try? container.decode(String.self, forKey: .manifest)
         added = Self.decodeBool(container, key: .added)
         ready = Self.decodeBool(container, key: .ready)
         withdrawn = Self.decodeBool(container, key: .withdrawn)
@@ -898,7 +900,6 @@ struct VKAudioAttachment: Decodable {
         if let value = try? container.decode(Int.self, forKey: key) { return value != 0 }
         return nil
     }
-    let manifest: String?
 }
 
 struct VKProfile: Decodable {

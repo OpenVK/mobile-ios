@@ -135,6 +135,16 @@ struct MainTabView: View {
             connectionStatus.start()
         }
     }
+
+    private func pauseAudioIfNeeded(for media: Attachment) {
+        switch media {
+        case .video(_, _),
+             .remoteVideo(_, _, _, _, _, _, _, _, _, _, _):
+            AudioPlayerService.shared.pause()
+        default:
+            break
+        }
+    }
 }
 
 private struct ConnectionStatusButton: View {
@@ -189,16 +199,6 @@ private struct ConnectionStatusButton: View {
                     }
                 }
             }
-        }
-    }
-
-    private func pauseAudioIfNeeded(for media: Attachment) {
-        switch media {
-        case .video(_, _),
-             .remoteVideo(_, _, _, _, _, _, _, _, _, _, _):
-            AudioPlayerService.shared.pause()
-        default:
-            break
         }
     }
 }

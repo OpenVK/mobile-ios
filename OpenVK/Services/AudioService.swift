@@ -579,13 +579,52 @@ private struct AudioPlaylistThumbDTO: Decodable {
     }
 }
 
-final class AudioCacheService {
+private struct CachedAudioTrackMetadata: Codable {
+    let vkID: Int?
+    let ownerID: Int?
+    let title: String
+    let artist: String
+    let duration: String
+    let durationSeconds: Int?
+    let url: String?
+    let artworkURL: String?
+
+    init(track: AudioTrack) {
+        vkID = track.vkID
+        ownerID = track.ownerID
+        title = track.title
+        artist = track.artist
+        duration = track.duration
+        durationSeconds = track.durationSeconds
+        url = track.url
+        artworkURL = track.artworkURL
+    }
+
+    var track: AudioTrack {
+        AudioTrack(
+            vkID: vkID,
+            ownerID: ownerID,
+            title: title,
+            artist: artist,
+            duration: duration,
+            durationSeconds: durationSeconds,
+            url: url,
+            artworkURL: artworkURL
+        )
+    }
+}
+
+final class AudioCacheService: ObservableObject {
     static let shared = AudioCacheService()
+
+    @Published private(set) var revision = 0
 
     private let fileManager = FileManager.default
     private let stateQueue = DispatchQueue(label: "openvk.audio-cache.state")
     private var waiters: [String: [(Result<URL, Error>) -> Void]] = [:]
-    private var tasks: [String: URLSessionDownloadTask] = [:]
+    private var tasks: [String: URLSessionDataTask] = [:]
+    private var generation = 0
+    private let chunkSize = 1024 * 1024
     private let limitKey = "openvk.audioCacheLimitBytes"
 
     private lazy var cacheDirectory: URL = {
@@ -611,11 +650,58 @@ final class AudioCacheService {
     }
 
     func cachedURL(for track: AudioTrack) -> URL? {
-        guard let remoteURL = usableRemoteURL(for: track) else { return nil }
-        let destination = destinationURL(for: track, remoteURL: remoteURL)
+        if let localURL = track.url.flatMap(URL.init(string:)), localURL.isFileURL,
+           fileManager.fileExists(atPath: localURL.path) {
+            return localURL
+        }
+        guard let remoteURL = remoteURL(for: track) else { return nil }
+        let destination = existingURL(for: track, remoteURL: remoteURL)
+            ?? destinationURL(for: track, remoteURL: remoteURL)
         guard fileManager.fileExists(atPath: destination.path) else { return nil }
         try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: destination.path)
+        stateQueue.async { [weak self] in
+            self?.writeMetadataIfMissing(for: track, at: destination)
+        }
         return destination
+    }
+
+    func isCached(_ track: AudioTrack) -> Bool {
+        if let localURL = track.url.flatMap(URL.init(string:)), localURL.isFileURL {
+            return fileManager.fileExists(atPath: localURL.path)
+        }
+        guard let remoteURL = remoteURL(for: track) else { return false }
+        return existingURL(for: track, remoteURL: remoteURL) != nil
+    }
+
+    func cachedTracks(completion: @escaping ([AudioTrack]) -> Void) {
+        stateQueue.async { [weak self] in
+            guard let self else { return }
+            let files = (try? self.fileManager.contentsOfDirectory(
+                at: self.cacheDirectory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            let tracks = files
+                .filter { $0.pathExtension != "json" && $0.pathExtension != "resume" && $0.pathExtension != "part" }
+                .sorted {
+                    let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                    return lhs > rhs
+                }
+                .map { file -> AudioTrack in
+                    if let data = try? Data(contentsOf: file.appendingPathExtension("json")),
+                       let metadata = try? JSONDecoder().decode(CachedAudioTrackMetadata.self, from: data) {
+                        return metadata.track
+                    }
+                    return AudioTrack(
+                        title: "Аудиозапись",
+                        artist: "Сохранено ранее",
+                        duration: "--:--",
+                        url: file.absoluteString
+                    )
+                }
+            DispatchQueue.main.async { completion(tracks) }
+        }
     }
 
     func cache(_ track: AudioTrack, completion: ((Result<URL, Error>) -> Void)? = nil) {
@@ -643,42 +729,118 @@ final class AudioCacheService {
                 return
             }
             self.waiters[key] = [callback]
+            let generation = self.generation
+            self.downloadNextChunk(for: track, remoteURL: remoteURL, key: key, generation: generation)
+        }
+    }
 
-            let task = URLSession.shared.downloadTask(with: remoteURL) { [weak self] temporaryURL, response, error in
-                guard let self = self else { return }
-                let result: Result<URL, Error>
+    private func downloadNextChunk(for track: AudioTrack, remoteURL: URL, key: String, generation: Int, total: Int64? = nil) {
+        guard self.generation == generation else { return }
+        let sourceHash = SHA256.hash(data: Data(remoteURL.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let partialURL = cacheDirectory.appendingPathComponent("\(key)_\(sourceHash).part")
+        let offset = Int64((try? partialURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        var request = URLRequest(url: remoteURL)
+        let end = min(offset + Int64(chunkSize) - 1, (total ?? Int64.max) - 1)
+        request.setValue("bytes=\(offset)-\(end)", forHTTPHeaderField: "Range")
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
 
-                if let error = error {
-                    result = .failure(error)
-                } else if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                    result = .failure(AudioPlaybackError.httpStatus(http.statusCode))
-                } else if let temporaryURL = temporaryURL {
-                    let destination = self.destinationURL(for: track, remoteURL: remoteURL)
-                    do {
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
+            self.stateQueue.async {
+                guard self.generation == generation else { return }
+                if let error {
+                    self.finishDownload(.failure(error), key: key)
+                    return
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    self.finishDownload(.failure(AudioPlaybackError.downloadFailed), key: key)
+                    return
+                }
+                if http.statusCode == 416 {
+                    if let size = self.unsatisfiedRangeSize(http), size > offset, size != total {
+                        self.downloadNextChunk(for: track, remoteURL: remoteURL, key: key, generation: generation, total: size)
+                    } else if offset > 0 {
+                        try? self.fileManager.removeItem(at: partialURL)
+                        self.downloadNextChunk(for: track, remoteURL: remoteURL, key: key, generation: generation)
+                    } else {
+                        self.finishDownload(.failure(AudioPlaybackError.downloadFailed), key: key)
+                    }
+                    return
+                }
+                guard let data, !data.isEmpty else {
+                    self.finishDownload(.failure(AudioPlaybackError.downloadFailed), key: key)
+                    return
+                }
+                do {
+                    let complete: Bool
+                    let nextTotal: Int64?
+                    if http.statusCode == 206 {
+                        guard let range = self.contentRange(http), range.start == offset,
+                              range.end - range.start + 1 == Int64(data.count),
+                              range.total > range.end else {
+                            throw AudioPlaybackError.downloadFailed
+                        }
+                        if offset == 0 { try data.write(to: partialURL, options: .atomic) }
+                        else {
+                            let file = try FileHandle(forWritingTo: partialURL)
+                            defer { file.closeFile() }
+                            file.seekToEndOfFile()
+                            file.write(data)
+                        }
+                        complete = range.end + 1 == range.total
+                        nextTotal = range.total
+                    } else if http.statusCode == 200 {
+                        try data.write(to: partialURL, options: .atomic)
+                        complete = true
+                        nextTotal = nil
+                    } else {
+                        throw AudioPlaybackError.httpStatus(http.statusCode)
+                    }
+
+                    if complete {
+                        let destination = self.destinationURL(for: track, remoteURL: remoteURL)
                         if self.fileManager.fileExists(atPath: destination.path) {
                             try self.fileManager.removeItem(at: destination)
                         }
-                        try self.fileManager.moveItem(at: temporaryURL, to: destination)
-                        try? self.fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: destination.path)
+                        try self.fileManager.moveItem(at: partialURL, to: destination)
+                        self.writeMetadataIfMissing(for: track, at: destination)
                         self.trimToLimit(preserving: [destination])
-                        result = .success(destination)
-                    } catch {
-                        result = .failure(error)
+                        self.finishDownload(.success(destination), key: key)
+                    } else {
+                        self.downloadNextChunk(for: track, remoteURL: remoteURL, key: key, generation: generation, total: nextTotal)
                     }
-                } else {
-                    result = .failure(AudioPlaybackError.downloadFailed)
-                }
-
-                self.stateQueue.async {
-                    self.tasks.removeValue(forKey: key)
-                    let callbacks = self.waiters.removeValue(forKey: key) ?? []
-                    DispatchQueue.main.async {
-                        callbacks.forEach { $0(result) }
-                    }
+                } catch {
+                    self.finishDownload(.failure(error), key: key)
                 }
             }
-            self.tasks[key] = task
-            task.resume()
+        }
+        tasks[key] = task
+        task.resume()
+    }
+
+    private func contentRange(_ response: HTTPURLResponse) -> (start: Int64, end: Int64, total: Int64)? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range"),
+              value.lowercased().hasPrefix("bytes ") else { return nil }
+        let parts = value.dropFirst(6).split(separator: "/")
+        guard parts.count == 2, let total = Int64(parts[1]) else { return nil }
+        let bounds = parts[0].split(separator: "-")
+        guard bounds.count == 2, let start = Int64(bounds[0]), let end = Int64(bounds[1]) else { return nil }
+        return (start, end, total)
+    }
+
+    private func unsatisfiedRangeSize(_ response: HTTPURLResponse) -> Int64? {
+        guard let value = response.value(forHTTPHeaderField: "Content-Range"),
+              value.lowercased().hasPrefix("bytes */") else { return nil }
+        return Int64(value.dropFirst(8))
+    }
+
+    private func finishDownload(_ result: Result<URL, Error>, key: String) {
+        tasks.removeValue(forKey: key)
+        let callbacks = waiters.removeValue(forKey: key) ?? []
+        DispatchQueue.main.async {
+            if case .success = result { self.revision &+= 1 }
+            callbacks.forEach { $0(result) }
         }
     }
 
@@ -703,9 +865,15 @@ final class AudioCacheService {
 
     func clear() {
         stateQueue.sync {
+            generation &+= 1
             tasks.values.forEach { $0.cancel() }
             tasks.removeAll()
+            let callbacks = waiters.values.flatMap { $0 }
             waiters.removeAll()
+            DispatchQueue.main.async {
+                let error = URLError(.cancelled)
+                callbacks.forEach { $0(.failure(error)) }
+            }
 
             guard let files = try? fileManager.contentsOfDirectory(
                 at: cacheDirectory,
@@ -714,6 +882,7 @@ final class AudioCacheService {
             ) else { return }
             files.forEach { try? fileManager.removeItem(at: $0) }
         }
+        DispatchQueue.main.async { self.revision &+= 1 }
     }
 
     func trimToLimit() {
@@ -731,6 +900,7 @@ final class AudioCacheService {
                 includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
                 options: [.skipsHiddenFiles]
             ) else { return }
+            files.removeAll { $0.pathExtension == "json" || $0.pathExtension == "resume" || $0.pathExtension == "part" }
 
             var total = self.directorySize(self.cacheDirectory)
             guard total > limit else { return }
@@ -743,23 +913,51 @@ final class AudioCacheService {
 
             for file in files where total > limit {
                 if protectedURLs.contains(file) { continue }
+                let metadata = file.appendingPathExtension("json")
                 let size = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    + Int64((try? metadata.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
                 try? self.fileManager.removeItem(at: file)
+                try? self.fileManager.removeItem(at: metadata)
                 total -= size
             }
+            if total > limit {
+                let resumableFiles = ((try? self.fileManager.contentsOfDirectory(
+                    at: self.cacheDirectory,
+                    includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+                    options: [.skipsHiddenFiles]
+                )) ?? [])
+                    .filter { $0.pathExtension == "resume" || $0.pathExtension == "part" }
+                    .sorted {
+                        let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                        let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                        return lhs < rhs
+                    }
+                for file in resumableFiles where total > limit {
+                    let size = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    try? self.fileManager.removeItem(at: file)
+                    total -= size
+                }
+            }
+            DispatchQueue.main.async { self.revision &+= 1 }
         }
     }
 
     func usableRemoteURL(for track: AudioTrack) -> URL? {
+        guard let url = remoteURL(for: track) else { return nil }
+
+        // OpenVK can intentionally return this file when direct audio URLs are disabled.
+        let filename = url.lastPathComponent.lowercased()
+        if filename == "nomusic.mp3" || filename == "api_unallowed.mp3" {
+            return nil
+        }
+        return url
+    }
+
+    private func remoteURL(for track: AudioTrack) -> URL? {
         guard let raw = track.url,
               let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else { return nil }
-
-        // OpenVK can intentionally return this file when direct audio URLs are disabled.
-        if url.path.lowercased().hasSuffix("/audio/nomusic.mp3") || url.lastPathComponent.lowercased() == "nomusic.mp3" {
-            return nil
-        }
         return url
     }
 
@@ -769,8 +967,32 @@ final class AudioCacheService {
         return cacheDirectory.appendingPathComponent("\(key).\(ext)")
     }
 
+    private func existingURL(for track: AudioTrack, remoteURL: URL) -> URL? {
+        let destination = destinationURL(for: track, remoteURL: remoteURL)
+        if fileManager.fileExists(atPath: destination.path) { return destination }
+        let legacyIdentity = "\(track.ownerID ?? 0):\(track.vkID ?? 0):\(remoteURL.absoluteString)"
+        let legacyKey = SHA256.hash(data: Data(legacyIdentity.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let ext = remoteURL.pathExtension.isEmpty ? "audio" : remoteURL.pathExtension
+        let legacyURL = cacheDirectory.appendingPathComponent("\(legacyKey).\(ext)")
+        return fileManager.fileExists(atPath: legacyURL.path) ? legacyURL : nil
+    }
+
+    private func writeMetadataIfMissing(for track: AudioTrack, at fileURL: URL) {
+        let metadataURL = fileURL.appendingPathExtension("json")
+        guard !fileManager.fileExists(atPath: metadataURL.path),
+              let data = try? JSONEncoder().encode(CachedAudioTrackMetadata(track: track)) else { return }
+        try? data.write(to: metadataURL, options: .atomic)
+        DispatchQueue.main.async { self.revision &+= 1 }
+    }
+
     private func cacheKey(for track: AudioTrack, remoteURL: URL) -> String {
-        let identity = "\(track.ownerID ?? 0):\(track.vkID ?? 0):\(remoteURL.absoluteString)"
+        let identity: String
+        if let ownerID = track.ownerID, let vkID = track.vkID {
+            identity = "audio:\(ownerID):\(vkID)"
+        } else {
+            identity = "url:\(remoteURL.absoluteString)"
+        }
         let digest = SHA256.hash(data: Data(identity.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -871,6 +1093,8 @@ final class AudioPlayerService: NSObject, ObservableObject {
     private var failedTrackKeys: Set<String> = []
     private var crossfadeTimer: DispatchWorkItem?
     private var crossfadeTimeObserver: Any?
+    private let audioSessionQueue = DispatchQueue(label: "openvk.audio.session")
+    private var audioSessionRequestID = 0
 
     private lazy var placeholderArtwork: MPMediaItemArtwork = {
         let size = CGSize(width: 512, height: 512)
@@ -1021,12 +1245,15 @@ final class AudioPlayerService: NSObject, ObservableObject {
 
     func resume() {
         guard currentTrack != nil else { return }
-        activateAudioSession()
-        player.play()
-        isPlaying = true
-        isPreparing = false
-        updateNowPlayingInfo()
-        syncRemoteCommandState()
+        let token = playbackToken
+        activateAudioSession { [weak self] activated in
+            guard let self, activated, self.playbackToken == token, self.currentTrack != nil else { return }
+            self.player.play()
+            self.isPlaying = true
+            self.isPreparing = false
+            self.updateNowPlayingInfo()
+            self.syncRemoteCommandState()
+        }
     }
 
     func pause() {
@@ -1237,16 +1464,23 @@ final class AudioPlayerService: NSObject, ObservableObject {
     private func beginPlayback(track: AudioTrack, url: URL, token: UUID) {
         guard playbackToken == token, isSameTrack(track, currentTrack) else { return }
         completeCrossfade()
-        activateAudioSession()
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
         player.volume = Float(1.0)
-        player.play()
-        isPreparing = false
-        isPlaying = true
-        updateNowPlayingInfo()
-        syncRemoteCommandState()
-        prefetchNeighbors()
+        activateAudioSession { [weak self] activated in
+            guard let self, self.playbackToken == token,
+                  self.isSameTrack(track, self.currentTrack) else { return }
+            self.isPreparing = false
+            guard activated else {
+                self.syncRemoteCommandState()
+                return
+            }
+            self.player.play()
+            self.isPlaying = true
+            self.updateNowPlayingInfo()
+            self.syncRemoteCommandState()
+            self.prefetchNeighbors()
+        }
     }
 
     private func prefetchNeighbors() {
@@ -1267,20 +1501,33 @@ final class AudioPlayerService: NSObject, ObservableObject {
         deactivateAudioSession()
     }
 
-    private func activateAudioSession() {
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [])
-            try session.setActive(true)
-        } catch {
-            errorMessage = error.localizedDescription
+    private func activateAudioSession(completion: @escaping (Bool) -> Void) {
+        audioSessionRequestID &+= 1
+        let requestID = audioSessionRequestID
+        audioSessionQueue.async { [weak self] in
+            let activationError: Error?
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .default, options: [])
+                try session.setActive(true)
+                activationError = nil
+            } catch {
+                activationError = error
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.audioSessionRequestID == requestID else { return }
+                if let activationError {
+                    self.errorMessage = activationError.localizedDescription
+                }
+                completion(activationError == nil)
+            }
         }
     }
 
     private func deactivateAudioSession() {
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        } catch {
+        audioSessionRequestID &+= 1
+        audioSessionQueue.async {
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         }
     }
 

@@ -121,22 +121,36 @@ struct VKMessageWallAttachment: Decodable {
 }
 
 struct ChatAudio: Hashable, Codable {
+    let vkID: Int?
+    let ownerID: Int?
     let artist: String
     let title: String
     let duration: Int
     let url: URL?
 
     init(_ audio: VKAudioAttachment) {
+        vkID = audio.id ?? audio.aid
+        ownerID = audio.ownerID
         artist = audio.artist ?? ""
         title = audio.title?.isEmpty == false ? audio.title! : "Аудиозапись"
         duration = audio.duration ?? 0
-        url = [audio.manifest, audio.url]
-            .compactMap { $0.flatMap(URL.init) }
-            .first(where: { ["http", "https"].contains($0.scheme?.lowercased() ?? "") })
+        url = audio.url.flatMap(URL.init(string:))
     }
 
     var durationText: String {
         String(format: "%d:%02d", duration / 60, duration % 60)
+    }
+
+    var track: AudioTrack {
+        AudioTrack(
+            vkID: vkID,
+            ownerID: ownerID,
+            title: title,
+            artist: artist.isEmpty ? "Неизвестный исполнитель" : artist,
+            duration: durationText,
+            durationSeconds: duration,
+            url: url?.absoluteString
+        )
     }
 }
 
