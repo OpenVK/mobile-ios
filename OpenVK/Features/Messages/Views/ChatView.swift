@@ -10,6 +10,41 @@ private struct PendingChatPhoto: Identifiable {
     let data: Data
 }
 
+struct RecentStickerStore {
+    private let defaults: UserDefaults
+    private let host: String
+    private let limit = 32
+
+    init(defaults: UserDefaults = .standard, host: String = AppConfig.currentHost) {
+        self.defaults = defaults
+        self.host = host
+    }
+
+    func load(userID: Int) -> [VKSticker] {
+        guard userID > 0,
+              let data = defaults.data(forKey: key(userID: userID)),
+              let stickers = try? JSONDecoder().decode([VKSticker].self, from: data) else { return [] }
+        var seen = Set<Int>()
+        return Array(stickers.filter { sticker in
+            guard let id = sticker.identifier else { return false }
+            return seen.insert(id).inserted
+        }.prefix(limit))
+    }
+
+    func record(_ sticker: VKSticker, userID: Int) -> [VKSticker] {
+        guard userID > 0, let id = sticker.identifier else { return [] }
+        let recent = Array(([sticker] + load(userID: userID).filter { $0.identifier != id }).prefix(limit))
+        if let data = try? JSONEncoder().encode(recent) {
+            defaults.set(data, forKey: key(userID: userID))
+        }
+        return recent
+    }
+
+    private func key(userID: Int) -> String {
+        "openvk.recent_stickers.\(host).\(userID)"
+    }
+}
+
 private struct ChatComposerHeightPreference: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
@@ -54,29 +89,40 @@ struct ChatView: View {
     var body: some View {
         GeometryReader { geometry in
             if #available(iOS 26.0, *) {
-                tableMessageHistory(viewportWidth: geometry.size.width)
-                    .scrollEdgeEffectStyle(nil, for: [.top, .bottom])
-                    .overlay(alignment: .bottom) {
-                        Group {
-                            if viewModel.canSendMessages {
-                                messageComposer(maxHeight: geometry.size.height / 2)
-                                    .padding(.horizontal, 12)
-                                    .padding(.bottom, 8)
-                            } else {
-                                Text("Вы больше не можете отправлять сообщения")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 14)
-                                    .padding(.vertical, 8)
-                                    .background(.thinMaterial, in: Capsule())
-                                    .padding(.bottom, 10)
-                            }
+                ZStack(alignment: .bottom) {
+                    tableMessageHistory(viewportWidth: geometry.size.width, showsJumpButton: false)
+                        .scrollEdgeEffectStyle(nil, for: [.top, .bottom])
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+
+                    Group {
+                        if viewModel.canSendMessages {
+                            messageComposer(maxHeight: geometry.size.height / 2)
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 8)
+                        } else {
+                            Text("Вы больше не можете отправлять сообщения")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(.thinMaterial, in: Capsule())
+                                .padding(.bottom, 10)
                         }
-                        .background(GeometryReader { composerGeometry in
-                            Color.clear.preference(key: ChatComposerHeightPreference.self, value: composerGeometry.size.height)
-                        })
                     }
-                    .onPreferenceChange(ChatComposerHeightPreference.self) { composerOverlayHeight = $0 }
+                    .background(GeometryReader { composerGeometry in
+                        Color.clear.preference(key: ChatComposerHeightPreference.self, value: composerGeometry.size.height)
+                    })
+
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .overlay(alignment: .bottomTrailing) {
+                    if !viewModel.isNearBottom {
+                        jumpToLatestButton
+                            .padding(.trailing, 16)
+                            .padding(.bottom, max(56, composerOverlayHeight) + 12)
+                    }
+                }
+                .onPreferenceChange(ChatComposerHeightPreference.self) { composerOverlayHeight = $0 }
             } else {
                 tableMessageHistory(viewportWidth: geometry.size.width)
                     .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -97,6 +143,9 @@ struct ChatView: View {
         }
         .onChange(of: text) { viewModel.sendTyping(for: $0) }
         .onAppear {
+            if let userID = AuthService.shared.currentUser?.uid {
+                recentStickers = RecentStickerStore().load(userID: userID)
+            }
             if #unavailable(iOS 16.0) {
                 LegacyChatTabBarHider.setTabBarHidden(true)
             }
@@ -111,30 +160,10 @@ struct ChatView: View {
             if phase != .active { viewModel.cacheCurrentPosition() }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .chatNavigationBarTransparent()
+        .chatNavigationBarBackground()
         .chatTabBarHidden()
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Group {
-                    if conversation.isChat {
-                        Button {
-                            showsChatInfo = true
-                        } label: {
-                            chatTitle
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Информация о беседе")
-                    } else {
-                        Button {
-                            profileToShow = conversation.peer
-                        } label: {
-                            chatTitle
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .chatToolbarCapsule(animationToken: toolbarCapsuleAnimationToken)
-            }
+        .chatTitleToolbar {
+            chatToolbarTitle
         }
         .task {
             viewModel.load()
@@ -172,6 +201,28 @@ struct ChatView: View {
         .fullScreenCover(item: $selectedVideo) { video in
             ChatVideoPlayer(video: video)
         }
+    }
+
+    private var chatToolbarTitle: some View {
+        Group {
+            if conversation.isChat {
+                Button {
+                    showsChatInfo = true
+                } label: {
+                    chatTitle
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Информация о беседе")
+            } else {
+                Button {
+                    profileToShow = conversation.peer
+                } label: {
+                    chatTitle
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .chatToolbarCapsule(animationToken: toolbarCapsuleAnimationToken)
     }
 
     private var chatTitle: some View {
@@ -224,7 +275,7 @@ struct ChatView: View {
         return "участников"
     }
 
-    private func tableMessageHistory(viewportWidth: CGFloat) -> some View {
+    private func tableMessageHistory(viewportWidth: CGFloat, showsJumpButton: Bool = true) -> some View {
         ChatTableHistory(
             messages: viewModel.messages,
             stickerPickerPresented: isEmojiPanelPresented,
@@ -281,31 +332,37 @@ struct ChatView: View {
             onTapBackground: dismissChatKeyboard
         )
         .overlay(alignment: .bottomTrailing) {
-            if !viewModel.isNearBottom {
-                Button {
-                    viewModel.scrollToBottom(animated: true)
-                } label: {
-                    ZStack {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 17, weight: .bold))
-                        if viewModel.unreadMessageCount > 0 {
-                            Text("\(viewModel.unreadMessageCount)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(4)
-                                .background(Color.appAccent, in: Circle())
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                                .offset(x: 7, y: -7)
-                        }
-                    }
-                    .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.plain)
-                .chatJumpButtonGlass()
+            if showsJumpButton && !viewModel.isNearBottom {
+                jumpToLatestButton
                 .padding(.trailing, 16)
                 .padding(.bottom, 12)
             }
         }
+    }
+
+    private var jumpToLatestButton: some View {
+        Button {
+            viewModel.scrollToBottom(animated: true)
+        } label: {
+            ZStack {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 17, weight: .bold))
+                if viewModel.unreadMessageCount > 0 {
+                    Text("\(viewModel.unreadMessageCount)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(4)
+                        .background(Color.appAccent, in: Circle())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .offset(x: 7, y: -7)
+                }
+            }
+            .frame(width: 52, height: 52)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .chatJumpButtonGlass()
+        .accessibilityLabel("К последним сообщениям")
     }
 
     private var profileNavigationLink: some View {
@@ -437,9 +494,6 @@ struct ChatView: View {
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .onTapGesture {
-                    isEmojiPanelPresented = false
-                }
                 .overlay(alignment: .trailing) {
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
@@ -450,11 +504,11 @@ struct ChatView: View {
                         Image(systemName: isEmojiPanelPresented ? "keyboard" : "face.smiling")
                             .font(.system(size: 19, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 48, height: 48)
+                            .contentShape(Rectangle())
                             .contentTransition(.symbolEffect(.replace))
                     }
                     .buttonStyle(.plain)
-                    .padding(.trailing, 4)
                     .accessibilityLabel("Эмодзи")
                 }
 
@@ -711,9 +765,9 @@ struct ChatView: View {
 
     private func sendSticker(_ sticker: VKSticker) {
         viewModel.send(sticker: sticker)
-        recentStickers.removeAll { $0.identifier == sticker.identifier }
-        recentStickers.insert(sticker, at: 0)
-        recentStickers = Array(recentStickers.prefix(32))
+        if let userID = AuthService.shared.currentUser?.uid {
+            recentStickers = RecentStickerStore().record(sticker, userID: userID)
+        }
     }
 
     private func openPhotoViewer(for photo: ChatPhoto) {
@@ -781,6 +835,10 @@ private struct ChatTableHistory: UIViewRepresentable {
         table.contentInsetAdjustmentBehavior = .never
         table.keyboardDismissMode = .interactive
         table.tableFooterView = UIView(frame: .zero)
+        if #available(iOS 26.0, *) {
+            table.topEdgeEffect.isHidden = true
+            table.bottomEdgeEffect.isHidden = true
+        }
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTapBackground))
         tap.cancelsTouchesInView = false
         table.addGestureRecognizer(tap)
@@ -854,7 +912,21 @@ private struct ChatTableHistory: UIViewRepresentable {
             suppressScrollCallbacks = true
             let pickerJustOpened = parent.stickerPickerPresented && !wasStickerPickerPresented
             wasStickerPickerPresented = parent.stickerPickerPresented
-            let desiredBottomInset = 10 + parent.bottomOverlayHeight
+            let safeArea = table.window?.safeAreaInsets ?? UIApplication.shared.firstKeyWindow?.safeAreaInsets ?? .zero
+            let desiredTopInset: CGFloat
+            let desiredBottomInset: CGFloat
+            if #available(iOS 26.0, *) {
+                let navigationBarHeight = table.chatParentController()?.navigationController?.navigationBar.bounds.height ?? 56
+                desiredTopInset = 10 + safeArea.top + navigationBarHeight
+                desiredBottomInset = 20 + safeArea.bottom + max(56, parent.bottomOverlayHeight)
+            } else {
+                desiredTopInset = 10
+                desiredBottomInset = 10 + parent.bottomOverlayHeight
+            }
+            if abs(table.contentInset.top - desiredTopInset) > 0.5 {
+                table.contentInset.top = desiredTopInset
+                table.verticalScrollIndicatorInsets.top = desiredTopInset
+            }
             if abs(table.contentInset.bottom - desiredBottomInset) > 0.5 {
                 table.contentInset.bottom = desiredBottomInset
                 table.verticalScrollIndicatorInsets.bottom = desiredBottomInset
@@ -983,7 +1055,15 @@ private struct ChatTableHistory: UIViewRepresentable {
             }
             lastHandledScrollRequestID = requestID
             table.layoutIfNeeded()
-            table.scrollToRow(at: IndexPath(row: row, section: 0), at: position, animated: animated)
+            if position == .bottom {
+                let bottom = max(
+                    -table.adjustedContentInset.top,
+                    table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom
+                )
+                table.setContentOffset(CGPoint(x: table.contentOffset.x, y: bottom), animated: animated)
+            } else {
+                table.scrollToRow(at: IndexPath(row: row, section: 0), at: position, animated: animated)
+            }
             parent.onScrollCompleted(requestID)
         }
 
@@ -1042,7 +1122,11 @@ private struct ChatTableHistory: UIViewRepresentable {
                 self.pendingVisibleReport = false
                 guard let first = table.indexPathsForVisibleRows?.map(\.row).min(),
                       self.displayedMessages.indices.contains(first) else { return }
-                let nearBottom = table.contentOffset.y + table.bounds.height >= table.contentSize.height - 32
+                let bottom = max(
+                    -table.adjustedContentInset.top,
+                    table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom
+                )
+                let nearBottom = table.contentOffset.y >= bottom - 32
                 self.parent.onVisible(self.displayedMessages[first].id, nearBottom)
             }
         }
@@ -1060,6 +1144,7 @@ private final class ChatMessageTableCell: UITableViewCell {
         selectionStyle = .none
         backgroundColor = .clear
         contentView.backgroundColor = .clear
+        contentView.clipsToBounds = true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1078,6 +1163,9 @@ private final class ChatMessageTableCell: UITableViewCell {
             )
         }
         let size = host.sizeThatFits(in: CGSize(width: width, height: .infinity))
+        if #available(iOS 16.4, *) {
+            return CGSize(width: width, height: max(1, ceil(size.height)))
+        }
         let safeAreaHeight = host.view.safeAreaInsets.top + host.view.safeAreaInsets.bottom
         return CGSize(width: width, height: max(1, ceil(size.height - safeAreaHeight)))
     }
@@ -1088,12 +1176,23 @@ private final class ChatMessageTableCell: UITableViewCell {
                 parentController.addChild(host)
                 host.didMove(toParent: parentController)
             }
-            host.rootView = AnyView(content.ignoresSafeArea())
+            if #available(iOS 16.4, *) {
+                host.rootView = content
+            } else {
+                host.rootView = AnyView(content.ignoresSafeArea())
+            }
             host.view.invalidateIntrinsicContentSize()
             return
         }
-        let host = UIHostingController(rootView: AnyView(content.ignoresSafeArea()))
+        let host: UIHostingController<AnyView>
+        if #available(iOS 16.4, *) {
+            host = UIHostingController(rootView: content)
+            host.safeAreaRegions = []
+        } else {
+            host = UIHostingController(rootView: AnyView(content.ignoresSafeArea()))
+        }
         host.view.backgroundColor = .clear
+        host.view.clipsToBounds = true
         host.view.translatesAutoresizingMaskIntoConstraints = false
         parentController?.addChild(host)
         contentView.addSubview(host.view)
@@ -1305,10 +1404,22 @@ private struct StickerPickerArtwork: View {
 }
 
 extension View {
+    @ViewBuilder func chatTitleToolbar<Title: View>(@ViewBuilder title: @escaping () -> Title) -> some View {
+        if #available(iOS 26.0, *) {
+            self.toolbar {
+                ToolbarItem(placement: .principal) { title() }
+                    .sharedBackgroundVisibility(.hidden)
+            }
+        } else {
+            self.toolbar {
+                ToolbarItem(placement: .principal) { title() }
+            }
+        }
+    }
+
     @ViewBuilder func chatStickerPickerSurface() -> some View {
         if #available(iOS 26.0, *) {
             self
-                .background(Color(.secondarySystemBackground).opacity(0.35), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         } else {
@@ -1338,8 +1449,12 @@ extension View {
         }
     }
 
-    @ViewBuilder func chatNavigationBarTransparent() -> some View {
-        if #available(iOS 16.0, *) {
+    @ViewBuilder func chatNavigationBarBackground() -> some View {
+        if #available(iOS 26.0, *) {
+            self.toolbarBackgroundVisibility(.visible, for: .navigationBar)
+        } else if #available(iOS 18.0, *) {
+            self.toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        } else if #available(iOS 16.0, *) {
             self.toolbarBackground(.hidden, for: .navigationBar)
         } else {
             self
@@ -2228,7 +2343,7 @@ private struct ChatRichAttachmentCard: View {
             Spacer(minLength: 0)
             Text(audio.durationText).font(.caption2).opacity(0.75)
         }
-        .foregroundStyle(isOutgoing ? .white : .primary)
+        .foregroundStyle(isOutgoing ? Color.white : Color(.label))
         .padding(8)
         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
@@ -2248,13 +2363,14 @@ private struct ChatRichAttachmentCard: View {
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(wall.authorName).font(.caption.weight(.semibold)).lineLimit(1)
-                    Text("Запись").font(.caption2).opacity(0.7)
+                    Text("Запись").font(.caption2).foregroundColor(Color(.secondaryLabel))
                 }
                 Spacer(minLength: 0)
                 if let url = wall.url {
                     Link(destination: url) {
                         Image(systemName: "arrow.up.right")
                             .font(.caption.weight(.semibold))
+                            .foregroundColor(Color(.label))
                             .frame(width: 28, height: 28)
                     }
                     .accessibilityLabel("Открыть запись")
@@ -2274,7 +2390,7 @@ private struct ChatRichAttachmentCard: View {
                 )
             }
         }
-        .foregroundStyle(.primary)
+        .foregroundColor(Color(.label))
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
@@ -2300,7 +2416,7 @@ private struct ChatForwardedMessageCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text("Пересланное сообщение")
-                .font(.caption2).opacity(0.7)
+                .font(.caption2).foregroundColor(Color(.secondaryLabel))
             Text(message.senderName)
                 .font(.caption.weight(.semibold))
             if !message.text.isEmpty {
@@ -2327,7 +2443,7 @@ private struct ChatForwardedMessageCard: View {
                 ))
             }
         }
-        .foregroundStyle(.primary)
+        .foregroundColor(Color(.label))
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
