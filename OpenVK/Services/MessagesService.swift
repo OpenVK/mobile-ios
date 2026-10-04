@@ -11,6 +11,7 @@ protocol MessagesServiceProtocol {
     func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool)
     func fetchHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool, completion: @escaping (Result<MessagesPage, Error>) -> Void)
     func sendMessage(peerID: Int, text: String, replyTo: Int?, completion: @escaping (Result<Int, Error>) -> Void)
+    func sendPhotos(peerID: Int, text: String, replyTo: Int?, photos: [Data], completion: @escaping (Result<Int, Error>) -> Void)
     func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void)
     func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
     func cachedStickerPacks() -> [VKStickerPack]?
@@ -28,7 +29,7 @@ final class MessagesService: MessagesServiceProtocol {
 
     private let client: APIClientProtocol
 
-    private init(client: APIClientProtocol = APIClient.shared) {
+    init(client: APIClientProtocol = APIClient.shared) {
         self.client = client
     }
 
@@ -83,6 +84,58 @@ final class MessagesService: MessagesServiceProtocol {
             as: Int.self,
             completion: { result in completion(result.mapError { $0 as Error }) }
         )
+    }
+
+    func sendPhotos(peerID: Int, text: String, replyTo: Int?, photos: [Data], completion: @escaping (Result<Int, Error>) -> Void) {
+        guard !photos.isEmpty else { completion(.failure(APIError.invalidResponse)); return }
+        Task {
+            do {
+                let server = try await client.call(
+                    method: "photos.getMessagesUploadServer",
+                    parameters: ["peer_id": String(peerID)],
+                    httpMethod: "GET",
+                    as: VKUploadServerResponse.self
+                )
+                guard let uploadURL = server.uploadUrl else { throw APIError.invalidResponse }
+
+                var attachments: [String] = []
+                for (index, photo) in photos.enumerated() {
+                    let uploadedData = try await client.upload(
+                        urlString: uploadURL,
+                        fileData: photo,
+                        fileName: "message_\(index).jpg",
+                        mimeType: "image/jpeg"
+                    )
+                    let uploaded = try JSONDecoder().decode(VKUploadResult.self, from: uploadedData)
+                    let saved = try await client.call(
+                        method: "photos.saveMessagesPhoto",
+                        parameters: ["photo": uploaded.photo, "hash": uploaded.hash, "server": uploaded.server],
+                        httpMethod: "POST",
+                        as: [VKSavePhotoItem].self
+                    )
+                    guard let item = saved.first else { throw APIError.invalidResponse }
+                    guard let accessKey = item.accessKey, !accessKey.isEmpty else {
+                        throw APIError.invalidResponse
+                    }
+                    attachments.append("photo\(item.ownerId)_\(item.id)_\(accessKey)")
+                }
+
+                var parameters = [
+                    "peer_id": String(peerID),
+                    "message": text,
+                    "attachment": attachments.joined(separator: ","),
+                    "random_id": String(Int.random(in: 1...Int.max))
+                ]
+                if let replyTo { parameters["reply_to"] = String(replyTo) }
+                let messageID = try await client.call(
+                    method: "messages.send", parameters: parameters,
+                    httpMethod: "POST", as: Int.self
+                )
+                await MainActor.run { completion(.success(messageID)) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
+            }
+        }
     }
 
     func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void) {
@@ -319,6 +372,7 @@ final class MessagesService: MessagesServiceProtocol {
     private func messagePreview(_ message: VKConversationMessage?) -> String {
         let text = message?.body ?? message?.text ?? ""
         if !text.isEmpty { return text }
+        if !(message?.fwdMessages ?? []).isEmpty { return "[Пересланное сообщение]" }
         guard let attachments = message?.attachments, !attachments.isEmpty else { return "" }
 
         return attachments.map { attachment in

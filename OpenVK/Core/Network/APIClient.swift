@@ -235,7 +235,7 @@ final class APIClient: APIClientProtocol {
 
         #if DEBUG
         if httpMethod == "POST", let body = request.httpBody.flatMap({ String(data: $0, encoding: .utf8) }) {
-            print("[API Request] POST \(requestURL.absoluteString) body: \(body)")
+            print("[API Request] POST \(redactedForLogging(requestURL.absoluteString)) body: \(redactedForLogging(body))")
         }
         #endif
 
@@ -265,7 +265,7 @@ final class APIClient: APIClientProtocol {
 
         #if DEBUG
         if let str = String(data: data, encoding: .utf8) {
-            print("OpenVK API Response (\(method)), HTTP \(http.statusCode): \(str)")
+            print("OpenVK API Response (\(method)), HTTP \(http.statusCode): \(redactedForLogging(str))")
         }
         #endif
 
@@ -302,6 +302,13 @@ final class APIClient: APIClientProtocol {
             throw APIError.decoding(error)
         }
     }
+
+    #if DEBUG
+    private func redactedForLogging(_ value: String) -> String {
+        guard let token = AuthService.shared.token, !token.isEmpty else { return value }
+        return value.replacingOccurrences(of: token, with: "<redacted>")
+    }
+    #endif
 
     private func cachedResponse<T: Decodable>(for key: String, as type: T.Type) -> T? {
         guard let data = CacheService.shared.cachedData(for: key),

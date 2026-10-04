@@ -210,18 +210,14 @@ struct RepostView: View {
             Avatar(
                 user: conversation.peer,
                 size: 44,
-                placeholderImageName: conversation.isChat ? "chat_default_100" : nil
+                placeholderImageName: conversation.isChat ? "chat_default_100" : nil,
+                isChat: conversation.isChat
             )
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(conversation.peer.displayName)
-                    .font(.system(size: 15))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-                Text(conversation.isChat ? "Беседа" : "Личное сообщение")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
+            Text(conversation.peer.displayName)
+                .font(.system(size: 15))
+                .foregroundColor(.primary)
+                .lineLimit(1)
 
             Spacer(minLength: 8)
 
@@ -424,20 +420,15 @@ struct RepostView: View {
 
     private var actionRow: some View {
         HStack(spacing: 0) {
-            shareAction(icon: "paperplane.fill",
-                        title: "В сообщении",
-                        isSelected: mode == .chat) {
-                withAnimation { mode = .chat }
-            }
             shareAction(icon: "person.fill",
                         title: "На своей странице",
                         isSelected: mode == .myWall) {
-                withAnimation { mode = .myWall }
+                withAnimation { mode = mode == .myWall ? .chat : .myWall }
             }
             shareAction(icon: "person.2.fill",
                         title: "На стене группы",
                         isSelected: mode == .group) {
-                withAnimation { mode = .group }
+                withAnimation { mode = mode == .group ? .chat : .group }
             }
             shareAction(icon: "link",
                         title: "Скопировать ссылку",

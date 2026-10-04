@@ -105,7 +105,8 @@ struct ConversationRow: View {
                 Avatar(
                     user: conversation.peer,
                     size: 48,
-                    placeholderImageName: conversation.isChat ? "chat_default_100" : nil
+                    placeholderImageName: conversation.isChat ? "chat_default_100" : nil,
+                    isChat: conversation.isChat
                 )
 
                 if conversation.peer.isOnline && !conversation.isChat {

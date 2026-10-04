@@ -21,6 +21,7 @@ final class ChatViewModel: ObservableObject {
     @Published var typingText: String?
     @Published private(set) var stickerPacks: [VKStickerPack] = []
     @Published private(set) var isLoadingStickerPacks = false
+    @Published private(set) var isSendingPhotos = false
     @Published private(set) var isPeerOnline: Bool
     @Published private(set) var peerLastSeen: Date?
     @Published private(set) var canSendMessages: Bool
@@ -237,6 +238,23 @@ final class ChatViewModel: ObservableObject {
                 }
             case .failure:
                 self.messages[index] = pendingMessage.updatingDeliveryStatus(.failed)
+            }
+        }
+    }
+
+    func sendPhotos(text: String, photos: [Data], replyTo: Int?, completion: @escaping (Bool) -> Void) {
+        guard canSendMessages, !photos.isEmpty, !isSendingPhotos else { completion(false); return }
+        isSendingPhotos = true
+        service.sendPhotos(peerID: conversation.id, text: text, replyTo: replyTo, photos: photos) { [weak self] result in
+            guard let self else { completion(false); return }
+            self.isSendingPhotos = false
+            switch result {
+            case .success(let messageID):
+                self.scrollTo(messageID: messageID)
+                completion(true)
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+                completion(false)
             }
         }
     }

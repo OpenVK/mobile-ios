@@ -836,6 +836,8 @@ struct VKAudioAttachment: Decodable {
     let artist: String?
     let title: String?
     let duration: Int?
+    let url: String?
+    let manifest: String?
 }
 
 struct VKProfile: Decodable {
@@ -926,6 +928,7 @@ struct VKUploadServerResponse: Decodable {
 struct VKSavePhotoItem: Decodable {
     let id: Int
     let ownerId: Int
+    let accessKey: String?
 }
 
 struct VKUploadResult: Decodable {

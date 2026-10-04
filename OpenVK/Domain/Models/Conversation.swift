@@ -89,6 +89,7 @@ struct VKConversationMessage: Decodable {
     let body: String?
     let text: String?
     let attachments: [VKConversationAttachment]?
+    let fwdMessages: [VKHistoryMessage]?
     let readState: Int?
 }
 
@@ -98,6 +99,205 @@ struct VKConversationAttachment: Decodable {
     let photo: VKMessagePhoto?
     let video: VKVideoAttachment?
     let doc: VKDocAttachment?
+    let audio: VKAudioAttachment?
+    let wall: VKMessageWallAttachment?
+    let poll: VKPollAttachment?
+    let link: VKMessageLinkAttachment?
+}
+
+struct VKMessageLinkAttachment: Decodable {
+    let title: String?
+    let url: String?
+}
+
+struct VKMessageWallAttachment: Decodable {
+    let id: Int?
+    let ownerId: Int?
+    let fromId: Int?
+    let text: String?
+    let authorName: String?
+    let authorAvatar: String?
+    let attachments: [VKConversationAttachment]?
+}
+
+struct ChatAudio: Hashable, Codable {
+    let artist: String
+    let title: String
+    let duration: Int
+    let url: URL?
+
+    init(_ audio: VKAudioAttachment) {
+        artist = audio.artist ?? ""
+        title = audio.title?.isEmpty == false ? audio.title! : "Аудиозапись"
+        duration = audio.duration ?? 0
+        url = [audio.manifest, audio.url]
+            .compactMap { $0.flatMap(URL.init) }
+            .first(where: { ["http", "https"].contains($0.scheme?.lowercased() ?? "") })
+    }
+
+    var durationText: String {
+        String(format: "%d:%02d", duration / 60, duration % 60)
+    }
+}
+
+struct ChatPoll: Hashable, Codable {
+    let question: String
+    let answers: [String]
+    let votes: Int
+
+    init(_ poll: VKPollAttachment) {
+        question = poll.question ?? "Опрос"
+        answers = (poll.answers ?? []).compactMap(\.text)
+        votes = poll.votes ?? 0
+    }
+}
+
+struct ChatLink: Hashable, Codable {
+    let title: String
+    let url: URL?
+
+    init(_ link: VKMessageLinkAttachment) {
+        url = link.url.flatMap(URL.init)
+        title = link.title?.isEmpty == false ? link.title! : (link.url ?? "Ссылка")
+    }
+}
+
+struct ChatWallPost: Hashable, Codable {
+    let authorName: String
+    let authorAvatarURL: URL?
+    let text: String
+    let url: URL?
+    let attachments: [ChatWallAttachment]
+
+    var postReference: (ownerID: Int, postID: Int)? {
+        guard let path = url?.lastPathComponent, path.hasPrefix("wall") else { return nil }
+        let parts = path.dropFirst(4).split(separator: "_", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let ownerID = Int(parts[0]), let postID = Int(parts[1]) else { return nil }
+        return (ownerID, postID)
+    }
+
+    init(_ wall: VKMessageWallAttachment, depth: Int) {
+        authorName = wall.authorName?.isEmpty == false ? wall.authorName! : "Запись"
+        authorAvatarURL = wall.authorAvatar.flatMap(URL.init)
+        text = wall.text ?? ""
+        if let ownerID = wall.ownerId ?? wall.fromId, let id = wall.id {
+            url = URL(string: "\(AppConfig.webBaseURL.absoluteString)wall\(ownerID)_\(id)")
+        } else {
+            url = nil
+        }
+        attachments = (wall.attachments ?? []).compactMap(ChatWallAttachment.init)
+    }
+}
+
+enum ChatWallAttachment: Hashable, Codable {
+    case photo(ChatPhoto)
+    case video(ChatVideo)
+    case audio(ChatAudio)
+    case document(ChatDocument)
+    case poll(ChatPoll)
+    case link(ChatLink)
+    case sticker(URL)
+    case unsupported(String)
+
+    init?(_ attachment: VKConversationAttachment) {
+        switch attachment.type?.lowercased() {
+        case "photo":
+            guard let photo = attachment.photo?.chatPhoto else { return nil }
+            self = .photo(photo)
+        case "video":
+            guard let video = attachment.video else { return nil }
+            self = .video(ChatVideo(video: video))
+        case "audio":
+            guard let audio = attachment.audio else { return nil }
+            self = .audio(ChatAudio(audio))
+        case "doc", "document":
+            guard let document = attachment.doc.flatMap(ChatDocument.init) else { return nil }
+            self = .document(document)
+        case "poll":
+            guard let poll = attachment.poll else { return nil }
+            self = .poll(ChatPoll(poll))
+        case "link":
+            guard let link = attachment.link else { return nil }
+            self = .link(ChatLink(link))
+        case "sticker":
+            guard let url = attachment.sticker?.imageURL else { return nil }
+            self = .sticker(url)
+        default:
+            guard let type = attachment.type else { return nil }
+            self = .unsupported(type)
+        }
+    }
+
+    var photos: [ChatPhoto] {
+        if case .photo(let photo) = self { return [photo] }
+        return []
+    }
+
+    var richAttachment: ChatRichAttachment {
+        switch self {
+        case .photo(let value): return .photo(value)
+        case .video(let value): return .video(value)
+        case .audio(let value): return .audio(value)
+        case .document(let value): return .document(value)
+        case .poll(let value): return .poll(value)
+        case .link(let value): return .link(value)
+        case .sticker(let value): return .sticker(value)
+        case .unsupported(let value): return .unsupported(value)
+        }
+    }
+}
+
+enum ChatRichAttachment: Hashable, Codable {
+    case photo(ChatPhoto)
+    case video(ChatVideo)
+    case audio(ChatAudio)
+    case document(ChatDocument)
+    case wall(ChatWallPost)
+    case poll(ChatPoll)
+    case link(ChatLink)
+    case sticker(URL)
+    case unsupported(String)
+
+    var photos: [ChatPhoto] {
+        switch self {
+        case .photo(let photo): return [photo]
+        case .wall(let wall): return wall.attachments.flatMap(\.photos)
+        default: return []
+        }
+    }
+
+    init?(_ attachment: VKConversationAttachment, depth: Int = 0) {
+        switch attachment.type?.lowercased() {
+        case "photo":
+            guard let photo = attachment.photo?.chatPhoto else { return nil }
+            self = .photo(photo)
+        case "video":
+            guard let video = attachment.video else { return nil }
+            self = .video(ChatVideo(video: video))
+        case "audio":
+            guard let audio = attachment.audio else { return nil }
+            self = .audio(ChatAudio(audio))
+        case "doc", "document":
+            guard let document = attachment.doc.flatMap(ChatDocument.init) else { return nil }
+            self = .document(document)
+        case "wall":
+            guard let wall = attachment.wall, depth < 2 else { return nil }
+            self = .wall(ChatWallPost(wall, depth: depth))
+        case "poll":
+            guard let poll = attachment.poll else { return nil }
+            self = .poll(ChatPoll(poll))
+        case "link":
+            guard let link = attachment.link else { return nil }
+            self = .link(ChatLink(link))
+        case "sticker":
+            guard let url = attachment.sticker?.imageURL else { return nil }
+            self = .sticker(url)
+        default:
+            guard let type = attachment.type else { return nil }
+            self = .unsupported(type)
+        }
+    }
 }
 
 struct VKMessagePhoto: Decodable {
@@ -316,6 +516,7 @@ struct VKHistoryMessage: Decodable {
     let edited: Bool?
     let editedAt: Int?
     let replyMessage: VKReplyMessage?
+    let fwdMessages: [VKHistoryMessage]?
 }
 
 struct VKReplyMessage: Decodable {
@@ -370,6 +571,32 @@ struct ChatReply: Hashable, Codable {
     let text: String
 }
 
+struct ChatForwardedMessage: Hashable, Codable {
+    let senderName: String
+    let text: String
+    let attachments: [ChatRichAttachment]
+    let forwardedMessages: [ChatForwardedMessage]
+
+    var photos: [ChatPhoto] {
+        attachments.flatMap(\.photos) + forwardedMessages.flatMap(\.photos)
+    }
+
+    init(_ message: VKHistoryMessage, profiles: [VKUserProfile], depth: Int = 0) {
+        let senderID = message.fromId ?? 0
+        let profile = profiles.first(where: { $0.id == abs(senderID) })
+        let name = [profile?.firstName, profile?.lastName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        senderName = name.isEmpty ? "Пользователь" : name
+        text = message.body ?? message.text ?? ""
+        attachments = (message.attachments ?? []).compactMap { ChatRichAttachment($0) }
+        forwardedMessages = depth < 2
+            ? (message.fwdMessages ?? []).map { ChatForwardedMessage($0, profiles: profiles, depth: depth + 1) }
+            : []
+    }
+}
+
 struct ChatMessage: Identifiable, Hashable, Codable {
     let id: Int
     let text: String
@@ -385,12 +612,19 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let videos: [ChatVideo]
     let documents: [ChatDocument]
     let gifs: [ChatDocument]
+    let richAttachments: [ChatRichAttachment]?
+    let forwardedMessages: [ChatForwardedMessage]?
     let reply: ChatReply?
     let systemEventText: String?
     let isDeleted: Bool
     let isEdited: Bool
     let deliveryStatus: MessageDeliveryStatus?
     let endsChatParticipation: Bool
+
+    var allPhotos: [ChatPhoto] {
+        (richAttachments?.flatMap(\.photos) ?? photos)
+            + (forwardedMessages ?? []).flatMap(\.photos)
+    }
 
     init(message: VKHistoryMessage, profiles: [VKUserProfile]) {
         let senderID = message.fromId ?? 0
@@ -402,7 +636,9 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         let documents = attachments.compactMap { $0.doc.flatMap(ChatDocument.init) }
         let gifs = documents.filter(\.isGIF)
         let regularDocuments = documents.filter { !$0.isGIF }
-        text = body.isEmpty && (!photos.isEmpty || !videos.isEmpty || !documents.isEmpty)
+        let richAttachments = attachments.compactMap { ChatRichAttachment($0) }
+        let forwardedMessages = (message.fwdMessages ?? []).map { ChatForwardedMessage($0, profiles: profiles) }
+        text = body.isEmpty && (!richAttachments.isEmpty || !forwardedMessages.isEmpty)
             ? ""
             : (body.isEmpty ? attachments.map { Self.attachmentTitle($0.type) }.joined(separator: " ") : body)
         date = Date(timeIntervalSince1970: TimeInterval(message.date ?? 0))
@@ -420,6 +656,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.videos = videos
         self.documents = regularDocuments
         self.gifs = gifs
+        self.richAttachments = richAttachments
+        self.forwardedMessages = forwardedMessages
         reply = message.replyMessage.map { replyMessage in
             let replySenderID = replyMessage.fromId ?? 0
             let profile = profiles.first(where: { $0.id == abs(replySenderID) })
@@ -469,6 +707,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         videos: [ChatVideo],
         documents: [ChatDocument],
         gifs: [ChatDocument],
+        richAttachments: [ChatRichAttachment]? = nil,
+        forwardedMessages: [ChatForwardedMessage]? = nil,
         reply: ChatReply? = nil,
         systemEventText: String?,
         isDeleted: Bool,
@@ -490,6 +730,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.videos = videos
         self.documents = documents
         self.gifs = gifs
+        self.richAttachments = richAttachments
+        self.forwardedMessages = forwardedMessages
         self.reply = reply
         self.systemEventText = systemEventText
         self.isDeleted = isDeleted
@@ -568,6 +810,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             videos: videos,
             documents: documents,
             gifs: gifs,
+            richAttachments: richAttachments,
+            forwardedMessages: forwardedMessages,
             reply: reply,
             systemEventText: systemEventText,
             isDeleted: isDeleted,
@@ -581,7 +825,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             id: id, text: value, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
-            documents: documents, gifs: gifs, reply: reply,
+            documents: documents, gifs: gifs, richAttachments: richAttachments,
+            forwardedMessages: forwardedMessages, reply: reply,
             systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus
         )
     }
@@ -591,7 +836,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             id: id, text: text, date: date, isOutgoing: isOutgoing, senderID: senderID,
             senderName: senderName, senderAvatarURL: senderAvatarURL, attachmentTypes: attachmentTypes,
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
-            documents: documents, gifs: gifs, reply: reply,
+            documents: documents, gifs: gifs, richAttachments: richAttachments,
+            forwardedMessages: forwardedMessages, reply: reply,
             systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus
         )
     }
