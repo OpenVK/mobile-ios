@@ -14,6 +14,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         return true
     }
+
 }
 
 @main
@@ -28,29 +29,43 @@ struct OpenVKApp: App {
                 .environmentObject(auth)
                 .onAppear {
                     requestNotificationPermissions()
-                    if auth.isAuthenticated {
-                        OnlineService.shared.start()
-                    }
+                    updateBackgroundServices()
                 }
                 .onChange(of: scenePhase) { newPhase in
                     switch newPhase {
                     case .active:
-                        if auth.isAuthenticated {
-                            OnlineService.shared.start()
-                        }
+                        updateBackgroundServices()
+                        LongPollService.shared.resumeAfterBackground()
                     case .inactive, .background:
                         OnlineService.shared.stop()
+                        AvatarRefreshService.shared.stop()
+                        LongPollService.shared.prepareForBackground()
                     @unknown default:
                         break
                     }
                 }
                 .onChange(of: auth.isAuthenticated) { isAuth in
                     if isAuth && scenePhase == .active {
-                        OnlineService.shared.start()
+                        updateBackgroundServices()
+                        LongPollService.shared.resumeAfterBackground()
                     } else if !isAuth {
                         OnlineService.shared.stop()
+                        AvatarRefreshService.shared.stop()
+                        LongPollService.shared.stop()
                     }
                 }
+        }
+    }
+
+    private func updateBackgroundServices() {
+        let shouldRun = auth.isAuthenticated && scenePhase == .active
+        if shouldRun {
+            OnlineService.shared.start()
+            AvatarRefreshService.shared.start()
+            LongPollService.shared.start()
+        } else {
+            OnlineService.shared.stop()
+            AvatarRefreshService.shared.stop()
         }
     }
 

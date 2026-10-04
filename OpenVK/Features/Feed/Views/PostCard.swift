@@ -191,8 +191,10 @@ struct PostCard: View {
             
             actions
             
-            if showCommentPreview, let lastComment = lastComment {
-                HStack(alignment: .top, spacing: 8) {
+            if showCommentPreview && post.comments > 0 {
+                ZStack(alignment: .top) {
+                    if let lastComment = lastComment {
+                        HStack(alignment: .top, spacing: 8) {
                     Avatar(user: lastComment.author, size: 28)
                     
                     VStack(alignment: .leading, spacing: 4) {
@@ -214,11 +216,14 @@ struct PostCard: View {
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
+                        }
+                        .padding(10)
+                        .background(Color(.secondarySystemBackground).opacity(0.5))
+                        .cornerRadius(8)
+                        .padding(.horizontal, 16)
+                    }
                 }
-                .padding(10)
-                .background(Color(.secondarySystemBackground).opacity(0.5))
-                .cornerRadius(8)
-                .padding(.horizontal, 16)
+                .frame(height: 62, alignment: .top)
                 .padding(.bottom, 12)
             }
         }
@@ -611,4 +616,3 @@ struct PostCard: View {
         }
     }
 }
-

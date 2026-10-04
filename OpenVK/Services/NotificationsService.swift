@@ -214,7 +214,7 @@ final class NotificationsService: NotificationsServiceProtocol {
             id: UUID(),
             type: notificationType,
             user: author,
-            postTextPreview: previewText,
+            postTextPreview: previewText?.htmlEntityDecoded,
             createdAt: timeAgo,
             isRead: isRead,
             ratingValue: ratingVal,

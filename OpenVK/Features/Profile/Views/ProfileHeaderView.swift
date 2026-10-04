@@ -8,6 +8,7 @@ import SwiftUI
 struct ProfileHeaderView: View {
 
     let user: User
+    let avatarRefreshToken: UUID
     @State private var isFriendLocal: Bool = false
 
     var isCurrentUser: Bool {
@@ -24,7 +25,11 @@ struct ProfileHeaderView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 16) {
-                Avatar(user: user, size: 76)
+                Avatar(
+                    user: user,
+                    size: 76,
+                    refreshToken: avatarRefreshToken
+                )
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
@@ -132,7 +137,9 @@ struct ProfileHeaderView: View {
                             .cornerRadius(8)
                         }
 
-                        NavigationLink(destination: ChatView(conversation: Conversation(peer: user, lastMessage: ""))) {
+                        NavigationLink {
+                            ChatView(conversation: directConversation)
+                        } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "bubble.left")
                                     .font(.system(size: 14, weight: .medium))
@@ -145,6 +152,7 @@ struct ProfileHeaderView: View {
                             .background(Color(.secondarySystemBackground))
                             .cornerRadius(8)
                         }
+
                     }
                 }
                 .padding(.horizontal, 16)
@@ -158,6 +166,21 @@ struct ProfileHeaderView: View {
             }
         }
         .background(Color(.systemBackground))
+    }
+
+    private var directConversation: Conversation {
+        Conversation(
+            id: user.uid ?? 0,
+            peer: user,
+            lastMessage: "",
+            lastMessageAuthorName: nil,
+            lastMessageOutgoing: false,
+            updatedAt: Date(),
+            unreadCount: 0,
+            lastMessageId: 0,
+            lastMessageReadState: nil,
+            isChat: false
+        )
     }
 
     private func toggleGroupMembership() {

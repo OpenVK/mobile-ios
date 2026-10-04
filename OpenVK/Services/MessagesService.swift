@@ -6,160 +6,417 @@
 import Foundation
 
 protocol MessagesServiceProtocol {
-    func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<[Conversation], Error>) -> Void)
-    func fetchMessages(peerID: Int, offset: Int, count: Int, completion: @escaping (Result<[Message], Error>) -> Void)
-    func send(text: String, to peerID: Int, completion: @escaping (Result<Int, Error>) -> Void)
-    func edit(messageID: Int, newText: String, completion: @escaping (Result<Void, Error>) -> Void)
-    func delete(messageIDs: [Int], completion: @escaping (Result<Void, Error>) -> Void)
+    func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
+    func cachedHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> MessagesPage?
+    func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool)
+    func fetchHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool, completion: @escaping (Result<MessagesPage, Error>) -> Void)
+    func sendMessage(peerID: Int, text: String, replyTo: Int?, completion: @escaping (Result<Int, Error>) -> Void)
+    func sendPhotos(peerID: Int, text: String, replyTo: Int?, photos: [Data], completion: @escaping (Result<Int, Error>) -> Void)
+    func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void)
+    func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
+    func cachedStickerPacks() -> [VKStickerPack]?
+    func setTyping(peerID: Int)
+    func markAsRead(peerID: Int)
+    func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func deleteConversation(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
+    func editMessage(peerID: Int, messageID: Int, text: String, completion: @escaping (Result<Void, Error>) -> Void)
+    func deleteMessage(peerID: Int, messageID: Int, forAll: Bool, completion: @escaping (Result<Void, Error>) -> Void)
 }
 
 final class MessagesService: MessagesServiceProtocol {
-
     static let shared = MessagesService()
+
     private let client: APIClientProtocol
 
-    private init(client: APIClientProtocol = APIClient.shared) {
+    init(client: APIClientProtocol = APIClient.shared) {
         self.client = client
     }
 
-    func fetchConversations(offset: Int = 0, count: Int = 20, completion: @escaping (Result<[Conversation], Error>) -> Void) {
-        let params: [String: String] = [
-            "offset": "\(offset)",
-            "count": "\(count)",
-            "extended": "1",
-            "fields": "id,first_name,last_name,screen_name,photo_100,online,last_seen,verified"
-        ]
+    func cachedHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int? = nil, reverse: Bool = false) -> MessagesPage? {
+        guard let data = CacheService.shared.cachedData(for: historyCacheKey(peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse)),
+              let cachedPage = try? JSONDecoder().decode(CachedMessagesPage.self, from: data),
+              cachedPage.count >= cachedPage.messages.count,
+              cachedPage.messages.allSatisfy({ $0.id > 0 }),
+              zip(cachedPage.messages, cachedPage.messages.dropFirst()).allSatisfy({ $0.0.id < $0.1.id }) else {
+            return nil
+        }
+        return MessagesPage(count: cachedPage.count, messages: cachedPage.messages)
+    }
 
-        client.call(method: "messages.getConversations", parameters: params, httpMethod: "GET", as: VKConversationsResponse.self) { result in
+    func cachedStickerPacks() -> [VKStickerPack]? {
+        guard let data = CacheService.shared.cachedData(for: "messages.sticker-packs"),
+              let packs = try? JSONDecoder().decode([VKStickerPack].self, from: data) else {
+            return nil
+        }
+        return packs
+    }
+
+    func fetchHistory(peerID: Int, offset: Int = 0, count: Int = 40, startMessageID: Int? = nil, reverse: Bool = false, completion: @escaping (Result<MessagesPage, Error>) -> Void) {
+        var parameters = ["peer_id": String(peerID), "offset": String(offset), "count": String(count), "extended": "1"]
+        if let startMessageID { parameters["start_message_id"] = String(startMessageID) }
+        if reverse { parameters["rev"] = "1" }
+        client.call(
+            method: "messages.getHistory",
+            parameters: parameters,
+            httpMethod: "GET",
+            as: VKMessagesHistoryResponse.self
+        ) { result in
             switch result {
             case .success(let response):
                 let profiles = response.profiles ?? []
-
-                let conversations = response.items.map { item -> Conversation in
-                    let peerID = item.conversation.peer.id
-                    let peerUser: User
-
-                    if let profile = profiles.first(where: { $0.id == peerID }) {
-                        let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")".trimmingCharacters(in: .whitespaces)
-                        peerUser = User(
-                            uid: peerID,
-                            username: profile.screenName ?? "id\(peerID)",
-                            displayName: name.isEmpty ? "Пользователь" : name,
-                            avatarURL: profile.photo100.flatMap { URL(string: $0) },
-                            isOnline: profile.online == 1,
-                            onlinePlatform: profile.lastSeen?.platformName,
-                            isOfficial: profile.verified == 1
-                        )
-                    } else {
-                        peerUser = User(uid: peerID, username: "id\(peerID)", displayName: "Пользователь \(peerID)")
-                    }
-
-                    let lastMessageBody = item.lastMessage?.body ?? ""
-                    let timestamp: TimeInterval
-                    if let dateInt = item.lastMessage?.date {
-                        timestamp = TimeInterval(dateInt)
-                    } else {
-                        timestamp = Date().timeIntervalSince1970
-                    }
-                    let date = Date(timeIntervalSince1970: timestamp)
-
-                    return Conversation(
-                        peer: peerUser,
-                        lastMessage: lastMessageBody,
-                        lastMessageOutgoing: item.lastMessage?.out == 1,
-                        updatedAt: date,
-                        unreadCount: item.conversation.unreadCount ?? 0,
-                        lastMessageId: item.conversation.lastMessageId
-                    )
-                }
-
-                completion(.success(conversations))
-
-            case .failure(let error):
-                completion(.failure(error))
+                let items = (response.items ?? []).map { ChatMessage(message: $0, profiles: profiles) }
+                let page = MessagesPage(count: response.count ?? items.count, messages: reverse ? items : Array(items.reversed()))
+                self.cacheHistory(page: page, peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse)
+                completion(.success(page))
+            case .failure(let error): completion(.failure(error))
             }
         }
     }
 
-    func fetchMessages(peerID: Int, offset: Int = 0, count: Int = 20, completion: @escaping (Result<[Message], Error>) -> Void) {
-        let params: [String: String] = [
-            "user_id": "\(peerID)",
-            "offset": "\(offset)",
-            "count": "\(count)",
+    func sendMessage(peerID: Int, text: String, replyTo: Int?, completion: @escaping (Result<Int, Error>) -> Void) {
+        var parameters = ["peer_id": String(peerID), "message": text, "random_id": String(Int.random(in: 1...Int.max))]
+        if let replyTo { parameters["reply_to"] = String(replyTo) }
+        client.call(
+            method: "messages.send",
+            parameters: parameters,
+            httpMethod: "POST",
+            as: Int.self,
+            completion: { result in completion(result.mapError { $0 as Error }) }
+        )
+    }
+
+    func sendPhotos(peerID: Int, text: String, replyTo: Int?, photos: [Data], completion: @escaping (Result<Int, Error>) -> Void) {
+        guard !photos.isEmpty else { completion(.failure(APIError.invalidResponse)); return }
+        Task {
+            do {
+                let server = try await client.call(
+                    method: "photos.getMessagesUploadServer",
+                    parameters: ["peer_id": String(peerID)],
+                    httpMethod: "GET",
+                    as: VKUploadServerResponse.self
+                )
+                guard let uploadURL = server.uploadUrl else { throw APIError.invalidResponse }
+
+                var attachments: [String] = []
+                for (index, photo) in photos.enumerated() {
+                    let uploadedData = try await client.upload(
+                        urlString: uploadURL,
+                        fileData: photo,
+                        fileName: "message_\(index).jpg",
+                        mimeType: "image/jpeg"
+                    )
+                    let uploaded = try JSONDecoder().decode(VKUploadResult.self, from: uploadedData)
+                    let saved = try await client.call(
+                        method: "photos.saveMessagesPhoto",
+                        parameters: ["photo": uploaded.photo, "hash": uploaded.hash, "server": uploaded.server],
+                        httpMethod: "POST",
+                        as: [VKSavePhotoItem].self
+                    )
+                    guard let item = saved.first else { throw APIError.invalidResponse }
+                    guard let accessKey = item.accessKey, !accessKey.isEmpty else {
+                        throw APIError.invalidResponse
+                    }
+                    attachments.append("photo\(item.ownerId)_\(item.id)_\(accessKey)")
+                }
+
+                var parameters = [
+                    "peer_id": String(peerID),
+                    "message": text,
+                    "attachment": attachments.joined(separator: ","),
+                    "random_id": String(Int.random(in: 1...Int.max))
+                ]
+                if let replyTo { parameters["reply_to"] = String(replyTo) }
+                let messageID = try await client.call(
+                    method: "messages.send", parameters: parameters,
+                    httpMethod: "POST", as: Int.self
+                )
+                await MainActor.run { completion(.success(messageID)) }
+            } catch {
+                await MainActor.run { completion(.failure(error)) }
+            }
+        }
+    }
+
+    func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void) {
+        client.call(
+            method: "messages.send",
+            parameters: ["peer_id": String(peerID), "sticker_id": String(stickerID), "random_id": String(Int.random(in: 1...Int.max))],
+            httpMethod: "POST",
+            as: Int.self,
+            completion: { result in completion(result.mapError { $0 as Error }) }
+        )
+    }
+
+    func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void) {
+        client.call(
+            method: "stickers.get",
+            parameters: ["count": "100"],
+            httpMethod: "GET",
+            as: VKStickerPacksResponse.self
+        ) { result in
+            let packs = result.map { $0.items ?? [] }.mapError { $0 as Error }
+            if case .success(let value) = packs {
+                self.cacheStickerPacks(value)
+            }
+            completion(packs)
+        }
+    }
+
+    func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool = false) {
+        guard let data = try? JSONEncoder().encode(CachedMessagesPage(count: page.count, messages: page.messages)) else { return }
+        CacheService.shared.cachePermanently(data: data, for: historyCacheKey(peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse))
+    }
+
+    private func cacheStickerPacks(_ packs: [VKStickerPack]) {
+        guard let data = try? JSONEncoder().encode(packs) else { return }
+        CacheService.shared.cachePermanently(data: data, for: "messages.sticker-packs")
+    }
+
+    private func historyCacheKey(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> String {
+        let userID = AuthService.shared.currentUser?.uid ?? 0
+        let base = "messages.history.\(AppConfig.currentHost).\(userID).\(peerID).\(offset).\(count)"
+        let anchored = startMessageID.map { "\(base).from.\($0)" } ?? base
+        return reverse ? "\(anchored).rev" : anchored
+    }
+
+    func setTyping(peerID: Int) {
+        client.call(
+            method: "messages.setActivity",
+            parameters: ["peer_id": String(peerID), "type": "typing"],
+            httpMethod: "POST",
+            as: Int.self
+        ) { _ in }
+    }
+
+    func markAsRead(peerID: Int) {
+        client.call(method: "messages.markAsRead", parameters: ["peer_id": String(peerID)], httpMethod: "POST", as: Int.self) { _ in }
+    }
+
+    func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.markAsRead",
+            parameters: ["peer_id": String(peerID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func deleteConversation(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.deleteConversation",
+            parameters: ["peer_id": String(peerID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.removeChatUser",
+            parameters: ["peer_id": String(peerID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func editMessage(peerID: Int, messageID: Int, text: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.edit",
+            parameters: ["peer_id": String(peerID), "message_id": String(messageID), "message": text],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func deleteMessage(peerID: Int, messageID: Int, forAll: Bool, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.delete",
+            parameters: [
+                "peer_id": String(peerID),
+                "message_ids": String(messageID),
+                "delete_for_all": forAll ? "1" : "0"
+            ],
+            httpMethod: "POST",
+            as: [String: Int].self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
+    }
+
+    func fetchConversations(
+        offset: Int = 0,
+        count: Int = 30,
+        completion: @escaping (Result<ConversationsPage, Error>) -> Void
+    ) {
+        let parameters: [String: String] = [
+            "offset": String(offset),
+            "count": String(count),
+            "filter": "all",
             "extended": "1",
-            "fields": "id,first_name,last_name,screen_name,photo_100"
+            "fields": "id,first_name,last_name,screen_name,photo_100,photo_200,online,last_seen,verified"
         ]
 
-        client.call(method: "messages.getHistory", parameters: params, httpMethod: "GET", as: VKMessageHistoryResponse.self) { result in
+        client.call(
+            method: "messages.getConversations",
+            parameters: parameters,
+            httpMethod: "GET",
+            as: VKConversationsResponse.self
+        ) { result in
             switch result {
             case .success(let response):
-                let messages = response.items.map { item -> Message in
-                    let direction: Message.Direction = item.out == 1 ? .outgoing : .incoming
-                    let text = item.text ?? item.body ?? ""
-                    let date = Date(timeIntervalSince1970: TimeInterval(item.date))
-                    return Message(
-                        id: item.id,
-                        peerId: item.peerId ?? peerID,
-                        fromId: item.fromId,
-                        text: text,
-                        date: date,
-                        direction: direction
-                    )
+                let profiles = response.profiles ?? []
+                let groups = response.groups ?? []
+                let conversations = (response.items ?? []).map {
+                    self.makeConversation(from: $0, profiles: profiles, groups: groups)
                 }
-                completion(.success(messages))
-
+                completion(.success(ConversationsPage(
+                    totalCount: response.count ?? conversations.count,
+                    conversations: conversations
+                )))
             case .failure(let error):
                 completion(.failure(error))
             }
         }
     }
 
-    func send(text: String, to peerID: Int, completion: @escaping (Result<Int, Error>) -> Void) {
-        let params: [String: String] = [
-            "user_id": "\(peerID)",
-            "message": text,
-            "random_id": "\(Int(Date().timeIntervalSince1970 * 1000))"
-        ]
+    private func makeConversation(
+        from item: VKConversationItem,
+        profiles: [VKUserProfile],
+        groups: [VKGroupProfile]
+    ) -> Conversation {
+        let peer = item.conversation.peer
+        let peerUser: User
+        let isChat = peer.type == "chat" || peer.id >= 2_000_000_000
 
-        client.call(method: "messages.send", parameters: params, httpMethod: "POST", as: Int.self) { result in
-            switch result {
-            case .success(let messageID):
-                completion(.success(messageID))
-            case .failure(let error):
-                completion(.failure(error))
-            }
+        if isChat {
+            let settings = item.conversation.chatSettings
+            peerUser = User(
+                uid: peer.id,
+                username: "",
+                displayName: settings?.title?.isEmpty == false ? settings!.title! : "Беседа",
+                avatarURL: settings?.photo100.flatMap(URL.init)
+            )
+        } else if peer.id < 0, let group = groups.first(where: { $0.id == abs(peer.id) }) {
+            peerUser = User(
+                uid: peer.id,
+                username: group.screenName ?? "club" + String(abs(peer.id)),
+                displayName: group.name ?? "Сообщество",
+                avatarURL: (group.photo200 ?? group.photo100).flatMap(URL.init),
+                isGroup: true,
+                isOfficial: group.verified == 1
+            )
+        } else if let profile = profiles.first(where: { $0.id == abs(peer.id) }) {
+            let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            peerUser = User(
+                uid: peer.id,
+                username: profile.screenName ?? "id" + String(abs(peer.id)),
+                displayName: name.isEmpty ? "Пользователь" : name,
+                avatarURL: (profile.photo200 ?? profile.photo100).flatMap(URL.init),
+                isOnline: profile.online == 1,
+                onlinePlatform: profile.lastSeen?.platformName,
+                lastSeen: profile.lastSeen?.time.map { Date(timeIntervalSince1970: $0).openvkLastSeen(sex: profile.sex) },
+                isOfficial: profile.verified == 1
+            )
+        } else {
+            peerUser = User(
+                uid: peer.id,
+                username: "id" + String(abs(peer.id)),
+                displayName: "Пользователь " + String(abs(peer.id))
+            )
         }
+
+        let message = item.lastMessage
+        let timestamp = TimeInterval(message?.date ?? 0)
+        let authorName: String?
+        if message?.out == 1 {
+            authorName = "Вы"
+        } else if let fromId = message?.fromId {
+            authorName = messageAuthorName(
+                fromId: fromId,
+                profiles: profiles,
+                groups: groups
+            ) ?? peerUser.displayName
+        } else {
+            authorName = message == nil ? nil : peerUser.displayName
+        }
+
+        let messageText = messagePreview(message)
+        return Conversation(
+            id: peer.id,
+            peer: peerUser,
+            lastMessage: messageText,
+            lastMessageAuthorName: authorName,
+            lastMessageOutgoing: message?.out == 1,
+            updatedAt: timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : Date(),
+            unreadCount: item.conversation.unreadCount ?? 0,
+            lastMessageId: item.conversation.lastMessageId ?? message?.id ?? 0,
+            lastMessageReadState: message?.readState,
+            isChat: isChat,
+            isChatMember: !["left", "kicked"].contains(item.conversation.chatSettings?.state?.lowercased())
+                && item.conversation.canWrite?.allowed != false
+                && item.conversation.canWrite?.reason != 915,
+            chatMemberCount: item.conversation.chatSettings?.membersCount
+        )
     }
 
-    func edit(messageID: Int, newText: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        let params: [String: String] = [
-            "message_id": "\(messageID)",
-            "message": newText
-        ]
+    private func messagePreview(_ message: VKConversationMessage?) -> String {
+        let text = message?.body ?? message?.text ?? ""
+        if !text.isEmpty { return text }
+        if !(message?.fwdMessages ?? []).isEmpty { return "[Пересланное сообщение]" }
+        guard let attachments = message?.attachments, !attachments.isEmpty else { return "" }
 
-        client.call(method: "messages.edit", parameters: params, httpMethod: "POST", as: Int.self) { result in
-            switch result {
-            case .success:
-                completion(.success(()))
-            case .failure(let error):
-                completion(.failure(error))
+        return attachments.map { attachment in
+            switch attachment.type?.lowercased() {
+            case "photo": return "[Фотография]"
+            case "video": return "[Видео]"
+            case "audio": return "[Аудиозапись]"
+            case "doc", "document": return "[Документ]"
+            case "wall": return "[Запись]"
+            case "market": return "[Товар]"
+            case "poll": return "[Опрос]"
+            case "sticker": return "[Стикер]"
+            case "gift": return "[Подарок]"
+            case "link": return "[Ссылка]"
+            default: return "[Вложение]"
             }
-        }
+        }.joined(separator: " ")
     }
 
-    func delete(messageIDs: [Int], completion: @escaping (Result<Void, Error>) -> Void) {
-        let params: [String: String] = [
-            "message_ids": messageIDs.map(String.init).joined(separator: ","),
-            "delete_for_all": "1"
-        ]
-
-        client.call(method: "messages.delete", parameters: params, httpMethod: "POST", as: [String: Int].self) { result in
-            switch result {
-            case .success:
-                completion(.success(()))
-            case .failure(let error):
-                completion(.failure(error))
-            }
+    private func messageAuthorName(
+        fromId: Int,
+        profiles: [VKUserProfile],
+        groups: [VKGroupProfile]
+    ) -> String? {
+        if fromId < 0, let group = groups.first(where: { $0.id == abs(fromId) }) {
+            return group.name
         }
+
+        guard let profile = profiles.first(where: { $0.id == abs(fromId) }) else {
+            return nil
+        }
+
+        let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return firstNameOnly(name.isEmpty ? profile.screenName : name)
     }
+
+    private func firstNameOnly(_ name: String?) -> String? {
+        guard let name, !name.isEmpty else { return nil }
+        return name.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
+    }
+}
+
+private struct CachedMessagesPage: Codable {
+    let count: Int
+    let messages: [ChatMessage]
 }

@@ -29,7 +29,7 @@ struct User: Identifiable, Hashable, Codable {
     let isGroup: Bool?          // nil or false for users, true for groups
     let isFriend: Bool?         // nil or false for non-friends, true for friends
     let status: String?         // Status text
-    let photoCount: Int?        // Total photos count
+    var photoCount: Int?        // Total photos count
     let about: String?          // About text
     let site: String?           // Personal site url
     let isOfficial: Bool?       // Verification check mark

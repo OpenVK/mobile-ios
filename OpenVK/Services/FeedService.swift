@@ -527,7 +527,7 @@ final class FeedService: FeedServiceProtocol {
             wallOwner: wallOwner,
             platform: item.postSource?.platform,
             timeAgo: timeAgo,
-            text: item.text ?? "",
+            text: (item.text ?? "").htmlEntityDecoded,
             hasImage: localAttachments.contains(where: { if case .image = $0 { return true } else if case .remoteImage = $0 { return true } else { return false } }),
             attachments: localAttachments,
             likes: item.likes?.count ?? 0,
@@ -724,6 +724,8 @@ struct VKPhotoSize: Decodable {
     let url: String?
     let src: String?
     let type: String?
+    let width: Int?
+    let height: Int?
 }
 
 struct VKVideoAttachment: Decodable {
@@ -740,6 +742,42 @@ struct VKVideoAttachment: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, duration, image, player, files, ownerId, likes, comments, reposts
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try? container.decode(Int.self, forKey: .id)
+        ownerId = try? container.decode(Int.self, forKey: .ownerId)
+        title = try? container.decode(String.self, forKey: .title)
+        duration = try? container.decode(Int.self, forKey: .duration)
+        image = try? container.decode([VKVideoImage].self, forKey: .image)
+        player = try? container.decode(String.self, forKey: .player)
+        likes = try? container.decode(VKLikesInfo.self, forKey: .likes)
+        comments = try? container.decode(VKCommentsInfo.self, forKey: .comments)
+        reposts = try? container.decode(VKRepostsInfo.self, forKey: .reposts)
+        files = Self.decodeFiles(from: container)
+    }
+
+    private static func decodeFiles(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> [String: String]? {
+        guard let decoder = try? container.superDecoder(forKey: .files) else {
+            return nil
+        }
+
+        let value = try? decoder.singleValueContainer()
+        if let dictionary = try? value?.decode([String: String].self) {
+            return dictionary
+        }
+
+        if let urls = try? value?.decode([String].self) {
+            return Dictionary(uniqueKeysWithValues: urls.enumerated().map { index, url in
+                ("file_\(index)", url)
+            })
+        }
+
+        return nil
     }
 }
 
@@ -766,6 +804,33 @@ struct VKDocAttachment: Decodable {
     let ext: String?
     let size: Int?
     let url: String?
+    let isGif: Int?
+    let preview: VKDocPreview?
+
+    private enum CodingKeys: String, CodingKey {
+        case title, ext, size, url, preview
+        case isGif = "is_gif"
+        case isGifCamel = "isGif"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try? container.decode(String.self, forKey: .title)
+        ext = try? container.decode(String.self, forKey: .ext)
+        size = try? container.decode(Int.self, forKey: .size)
+        url = try? container.decode(String.self, forKey: .url)
+        preview = try? container.decode(VKDocPreview.self, forKey: .preview)
+        isGif = (try? container.decode(Int.self, forKey: .isGif))
+            ?? (try? container.decode(Int.self, forKey: .isGifCamel))
+    }
+}
+
+struct VKDocPreview: Decodable {
+    let photo: VKDocPreviewPhoto?
+}
+
+struct VKDocPreviewPhoto: Decodable {
+    let sizes: [VKPhotoSize]?
 }
 
 struct VKAudioAttachment: Decodable {
@@ -833,6 +898,7 @@ struct VKAudioAttachment: Decodable {
         if let value = try? container.decode(Int.self, forKey: key) { return value != 0 }
         return nil
     }
+    let manifest: String?
 }
 
 struct VKProfile: Decodable {
@@ -923,6 +989,7 @@ struct VKUploadServerResponse: Decodable {
 struct VKSavePhotoItem: Decodable {
     let id: Int
     let ownerId: Int
+    let accessKey: String?
 }
 
 struct VKUploadResult: Decodable {

@@ -159,22 +159,18 @@ struct VideosListView: View {
                         .font(.system(size: 28))
                         .foregroundColor(Color.white.opacity(0.92))
 
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Text(video.duration)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(4)
-                                .padding(4)
-                        }
-                    }
                 }
             )
             .clipped()
+            .overlay(alignment: .bottomTrailing) {
+                Text(video.duration)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(4)
+                    .padding(4)
+            }
     }
 }
