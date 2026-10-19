@@ -46,6 +46,10 @@ final class ChatViewModel: ObservableObject {
     private var historyAnchorID: Int?
     private var newestLoadedMessageID: Int?
     private var pendingScrollRequestID: Int?
+    private var readThroughMessageID = 0
+    private var pendingReadMessageID: Int?
+    private var isMarkingRead = false
+    private var readTask: Task<Void, Never>?
 
     var canLoadOlderPage: Bool {
         hasMore && !messages.isEmpty && !isLoading && !isLoadingOlder && !isLoadingNewer
@@ -112,7 +116,7 @@ final class ChatViewModel: ObservableObject {
                 }
                 let existingIDs = Set(self.messages.map(\.id))
                 let wasShowingCachedPage = isInitialLoad && self.didLoadMessages
-                let newIncomingMessageArrived = !isInitialLoad && page.messages.contains {
+                let newIncomingMessages = isInitialLoad ? [] : page.messages.filter {
                     !existingIDs.contains($0.id) && !$0.isOutgoing
                 }
                 let overlapsCachedPage = !Set(self.messages.map(\.id)).isDisjoint(with: page.messages.map(\.id))
@@ -123,7 +127,10 @@ final class ChatViewModel: ObservableObject {
                         : self.mergingLoadedMessages(page.messages)
                 self.prefetchMedia(for: page.messages)
                 self.didLoadMessages = true
-                if newIncomingMessageArrived {
+                if !newIncomingMessages.isEmpty {
+                    self.updateUnreadMessageCount(self.unreadMessageCount + newIncomingMessages.filter {
+                        $0.incomingReadState == 0 && $0.id > self.readThroughMessageID
+                    }.count)
                     HapticManager.playMessageSound()
                     if self.isNearBottom {
                         self.requestScroll(.bottom(animated: true))
@@ -149,9 +156,6 @@ final class ChatViewModel: ObservableObject {
                 } else {
                     self.offset = self.messages.filter { $0.id > 0 }.count
                     self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
-                }
-                if self.historyAnchorID == nil {
-                    self.service.markAsRead(peerID: self.conversation.id)
                 }
             case .failure(let error): self.errorMessage = error.localizedDescription
             }
@@ -333,6 +337,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     func cacheCurrentPosition() {
+        readTask?.cancel()
+        flushPendingRead()
         cachePositionTask?.cancel()
         cachePositionTask = nil
         guard let messageID = visibleMessageID else { return }
@@ -370,11 +376,60 @@ final class ChatViewModel: ObservableObject {
     }
 
     func scrollToBottom(animated: Bool = false) {
-        unreadMessageCount = 0
         if historyAnchorID == nil {
             requestScroll(.bottom(animated: animated))
         } else {
             loadLatest(animated: animated)
+        }
+    }
+
+    func markVisibleMessagesAsRead(through messageID: Int) {
+        guard !isLoading, pendingScrollRequestID == nil, messageID >= readThroughMessageID,
+              messages.contains(where: { $0.id == messageID }) else { return }
+        let newlyRead = messages.filter {
+            !$0.isOutgoing && $0.incomingReadState == 0
+                && $0.id > readThroughMessageID && $0.id <= messageID
+        }
+        let reachedLatest = historyAnchorID == nil
+            && messageID >= max(conversation.lastMessageId, messages.last(where: { $0.id > 0 })?.id ?? 0)
+        let remaining = reachedLatest ? 0 : max(0, unreadMessageCount - newlyRead.count)
+        guard remaining != unreadMessageCount || !newlyRead.isEmpty else { return }
+        readThroughMessageID = messageID
+        updateUnreadMessageCount(remaining)
+        pendingReadMessageID = messageID
+        readTask?.cancel()
+        readTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            self?.flushPendingRead()
+        }
+    }
+
+    private func updateUnreadMessageCount(_ count: Int) {
+        unreadMessageCount = count
+        NotificationCenter.default.post(
+            name: .openvkConversationUnreadCountDidChange,
+            object: nil,
+            userInfo: ["peerID": conversation.id, "unreadCount": count]
+        )
+    }
+
+    private func flushPendingRead() {
+        guard !isMarkingRead, let messageID = pendingReadMessageID else { return }
+        pendingReadMessageID = nil
+        isMarkingRead = true
+        service.markAsRead(peerID: conversation.id, through: messageID) { [self] result in
+            Task { @MainActor in
+                isMarkingRead = false
+                switch result {
+                case .success:
+                    AuthService.shared.fetchCounters()
+                    flushPendingRead()
+                case .failure(let error):
+                    pendingReadMessageID = max(pendingReadMessageID ?? 0, messageID)
+                    errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -621,7 +676,6 @@ final class ChatViewModel: ObservableObject {
                 self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
                 self.prefetchMedia(for: page.messages)
                 self.requestScroll(.bottom(animated: animated))
-                self.service.markAsRead(peerID: self.conversation.id)
             case .failure(let error):
                 self.errorMessage = error.localizedDescription
             }
@@ -689,7 +743,6 @@ final class ChatViewModel: ObservableObject {
             historyAnchorID = nil
             offset = messages.filter { $0.id > 0 }.count
             hasMore = offset < totalCount
-            service.markAsRead(peerID: conversation.id)
         }
     }
 

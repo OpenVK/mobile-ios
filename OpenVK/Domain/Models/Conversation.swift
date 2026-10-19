@@ -12,7 +12,7 @@ struct Conversation: Identifiable, Hashable {
     let lastMessageAuthorName: String?
     let lastMessageOutgoing: Bool
     let updatedAt: Date
-    let unreadCount: Int
+    var unreadCount: Int
     let lastMessageId: Int
     let lastMessageReadState: Int?
 
@@ -633,6 +633,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let isDeleted: Bool
     let isEdited: Bool
     let deliveryStatus: MessageDeliveryStatus?
+    var incomingReadState: Int? = nil
     let endsChatParticipation: Bool
 
     var allPhotos: [ChatPhoto] {
@@ -704,6 +705,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isDeleted = message.deleted == 1
         isEdited = message.edited == true || message.editedAt != nil
         deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
+        incomingReadState = isOutgoing ? nil : message.readState
     }
 
     private init(
@@ -728,6 +730,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isDeleted: Bool,
         isEdited: Bool = false,
         deliveryStatus: MessageDeliveryStatus?,
+        incomingReadState: Int? = nil,
         endsChatParticipation: Bool = false
     ) {
         self.id = id
@@ -751,6 +754,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.isDeleted = isDeleted
         self.isEdited = isEdited
         self.deliveryStatus = deliveryStatus
+        self.incomingReadState = incomingReadState
         self.endsChatParticipation = endsChatParticipation
     }
 
@@ -830,7 +834,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             systemEventText: systemEventText,
             isDeleted: isDeleted,
             isEdited: isEdited,
-            deliveryStatus: status
+            deliveryStatus: status,
+            incomingReadState: incomingReadState
         )
     }
 
@@ -841,7 +846,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
-            systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus
+            systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus,
+            incomingReadState: incomingReadState
         )
     }
 
@@ -852,7 +858,8 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             stickerURL: stickerURL, stickerAnimationURL: stickerAnimationURL, photos: photos, videos: videos,
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
-            systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus
+            systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus,
+            incomingReadState: incomingReadState
         )
     }
 

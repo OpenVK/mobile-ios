@@ -94,6 +94,9 @@ struct MessagesView: View {
         .refreshable {
             viewModel.load()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openvkConversationUnreadCountDidChange)) {
+            viewModel.updateUnreadCount($0)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openvkLongPollDidReceiveEvent)) { notification in
             let type = notification.userInfo?["type"] as? Int ?? -1
             if type == 4 {
@@ -101,7 +104,7 @@ struct MessagesView: View {
                 AuthService.shared.fetchCounters()
             } else if (61...64).contains(type) {
                 viewModel.handleLongPollEvent(notification)
-            } else if [0, 3, 5, 7, 13, 14, 51, 52].contains(type) {
+            } else if [0, 3, 5, 6, 7, 13, 14, 51, 52].contains(type) {
                 viewModel.load()
                 AuthService.shared.fetchCounters()
             } else if type == 80 {

@@ -16,7 +16,7 @@ protocol MessagesServiceProtocol {
     func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
     func cachedStickerPacks() -> [VKStickerPack]?
     func setTyping(peerID: Int)
-    func markAsRead(peerID: Int)
+    func markAsRead(peerID: Int, through messageID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func deleteConversation(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
@@ -189,8 +189,15 @@ final class MessagesService: MessagesServiceProtocol {
         ) { _ in }
     }
 
-    func markAsRead(peerID: Int) {
-        client.call(method: "messages.markAsRead", parameters: ["peer_id": String(peerID)], httpMethod: "POST", as: Int.self) { _ in }
+    func markAsRead(peerID: Int, through messageID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.markAsRead",
+            parameters: ["peer_id": String(peerID), "start_message_id": String(messageID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
     }
 
     func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {

@@ -8,6 +8,7 @@ import UIKit
 
 extension Notification.Name {
     static let openvkLongPollDidReceiveEvent = Notification.Name("openvk.longPollDidReceiveEvent")
+    static let openvkConversationUnreadCountDidChange = Notification.Name("openvk.conversationUnreadCountDidChange")
 }
 
 private struct LongPollServerResponse: Decodable {

@@ -191,6 +191,13 @@ final class MessagesViewModel: ObservableObject {
         }
     }
 
+    func updateUnreadCount(_ notification: Notification) {
+        guard let peerID = notification.userInfo?["peerID"] as? Int,
+              let unreadCount = notification.userInfo?["unreadCount"] as? Int,
+              let index = conversations.firstIndex(where: { $0.id == peerID }) else { return }
+        conversations[index].unreadCount = max(0, unreadCount)
+    }
+
     func deleteConversation(_ conversation: Conversation) {
         service.deleteConversation(peerID: conversation.id) { [weak self] result in
             DispatchQueue.main.async {
