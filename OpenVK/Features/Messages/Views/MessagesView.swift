@@ -7,6 +7,7 @@ import SwiftUI
 
 struct MessagesView: View {
     @StateObject private var viewModel = MessagesViewModel()
+    @ObservedObject private var longPoll = LongPollService.shared
     @State private var showCreateChat = false
     @State private var showsArchive = false
     @State private var showsArchiveTip = false
@@ -26,7 +27,7 @@ struct MessagesView: View {
     var body: some View {
         MessagesNavigationContainer {
             archiveNavigableContent
-                .navigationTitle("Сообщения")
+                .navigationTitle(toolbarTitle)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button {
@@ -101,10 +102,14 @@ struct MessagesView: View {
                 }
         }
         .onAppear {
-            if viewModel.conversations.isEmpty {
-                viewModel.load()
-            }
+            viewModel.load()
             showFirstArchiveTipIfNeeded()
+        }
+        .onChange(of: longPoll.connectionState) { state in
+            if state == .connected {
+                viewModel.load()
+                if !viewModel.searchQuery.isEmpty { viewModel.updateSearch(query: viewModel.searchQuery) }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: ChatArchiveStore.didChange)) { _ in
             viewModel.refreshArchive()
@@ -134,6 +139,16 @@ struct MessagesView: View {
         } message: {
             Text(viewModel.errorMessage ?? "Попробуйте ещё раз")
         }
+    }
+
+    private var toolbarTitle: String {
+        if !longPoll.hasNetworkConnection || longPoll.connectionState == .offline || longPoll.connectionState == .stopped {
+            return "Подключение…"
+        }
+        if viewModel.isLoading || viewModel.isLoadingMore || viewModel.isSearching || viewModel.isLoadingArchive {
+            return "Обновление…"
+        }
+        return longPoll.connectionState.title
     }
 
     private var archivedChats: some View {
@@ -327,9 +342,9 @@ struct MessagesView: View {
                         Image(systemName: viewModel.searchQuery.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                             .font(.system(size: 42))
                             .foregroundColor(.secondary)
-                        Text(viewModel.searchQuery.isEmpty ? "Нет чатов" : "Ничего не найдено")
+                        Text(viewModel.searchQuery.isEmpty ? (longPoll.connectionState == .offline ? "Нет сохранённых чатов" : "Нет чатов") : "Ничего не найдено")
                             .font(.system(size: 17, weight: .semibold))
-                        Text(viewModel.searchQuery.isEmpty ? "Здесь появятся ваши личные сообщения" : "Попробуйте изменить запрос")
+                        Text(viewModel.searchQuery.isEmpty ? (longPoll.connectionState == .offline ? "Открытые переписки будут доступны здесь без интернета." : "Здесь появятся ваши личные сообщения") : "Попробуйте изменить запрос")
                             .font(.system(size: 15))
                             .foregroundColor(.secondary)
                     }

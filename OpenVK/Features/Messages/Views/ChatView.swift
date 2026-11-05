@@ -57,6 +57,7 @@ struct ChatView: View {
     let conversation: Conversation
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel: ChatViewModel
+    @ObservedObject private var longPoll = LongPollService.shared
     @State private var text = ""
     @State private var legacyTextHeight: CGFloat = 36
     @State private var isEmojiPanelPresented = false
@@ -166,6 +167,9 @@ struct ChatView: View {
                 if #unavailable(iOS 16.0) {
                     LegacyChatTabBarHider.setTabBarHidden(false)
                 }
+            }
+            .onChange(of: longPoll.connectionState) { state in
+                if state == .connected { viewModel.refreshAfterReconnect() }
             }
             .onChange(of: scenePhase) { phase in
                 if phase != .active { viewModel.cacheCurrentPosition() }
@@ -334,7 +338,16 @@ struct ChatView: View {
                 Text(conversation.peer.displayName)
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
-                if let typing = viewModel.typingText {
+                if let status = longPoll.connectionState.chatSubtitle {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if viewModel.isLoading {
+                    Text("Обновление…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if let typing = viewModel.typingText {
                     TypingStatusView(text: typing)
                 } else if conversation.isChat, let count = conversation.chatMemberCount {
                     Text("\(count) \(memberCountWord(count))")
@@ -353,7 +366,11 @@ struct ChatView: View {
 
     private var toolbarCapsuleAnimationToken: String {
         let subtitle: String
-        if let typing = viewModel.typingText {
+        if let status = longPoll.connectionState.chatSubtitle {
+            subtitle = status
+        } else if viewModel.isLoading {
+            subtitle = "Обновление…"
+        } else if let typing = viewModel.typingText {
             subtitle = typing
         } else if conversation.isChat, let count = conversation.chatMemberCount {
             subtitle = "\(count) \(memberCountWord(count))"
@@ -433,6 +450,20 @@ struct ChatView: View {
             onScrollCompleted: { viewModel.completeScroll(requestID: $0) },
             onTapBackground: dismissChatKeyboard
         )
+        .overlay {
+            if viewModel.messages.isEmpty, !viewModel.isLoading,
+               longPoll.connectionState == .offline {
+                VStack(spacing: 8) {
+                    Text("Нет сохранённых сообщений").font(.headline)
+                    Text("Откройте эту переписку с интернетом, чтобы читать её офлайн.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(24)
+                .allowsHitTesting(false)
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             if showsJumpButton && !viewModel.isNearBottom {
                 jumpToLatestButton
