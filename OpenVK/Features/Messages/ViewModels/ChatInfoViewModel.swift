@@ -49,6 +49,11 @@ final class ChatInfoViewModel: ObservableObject {
         memberCount = conversation.chatMemberCount ?? 0
         title = conversation.peer.displayName
         photoURL = conversation.peer.avatarURL
+        selectedSection = conversation.isChat ? .members : .photos
+    }
+
+    var availableSections: [ChatMaterialSection] {
+        ChatMaterialSection.allCases.filter { conversation.isChat || $0 != .members }
     }
 
     var canAddMembers: Bool { canInvite }
@@ -60,7 +65,11 @@ final class ChatInfoViewModel: ObservableObject {
     func load() {
         guard !membersLoaded else { return }
         membersLoaded = true
-        refreshMembers()
+        if conversation.isChat {
+            refreshMembers()
+        } else {
+            loadMaterials(selectedSection)
+        }
         Task {
             if let muted = try? await service.getMuted(peerID: conversation.id) {
                 isMuted = muted
@@ -69,7 +78,7 @@ final class ChatInfoViewModel: ObservableObject {
     }
 
     func refreshMembers() {
-        guard !isLoadingMembers else { return }
+        guard conversation.isChat, !isLoadingMembers else { return }
         isLoadingMembers = true
         Task {
             do {
@@ -256,7 +265,7 @@ final class ChatInfoViewModel: ObservableObject {
     }
 
     func leaveConversation() {
-        guard !isWorking else { return }
+        guard conversation.isChat, !isWorking else { return }
         isWorking = true
         MessagesService.shared.leaveChat(peerID: conversation.id) { [weak self] result in
             DispatchQueue.main.async {

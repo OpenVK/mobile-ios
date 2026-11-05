@@ -303,26 +303,14 @@ struct ChatView: View {
     }
 
     private var chatToolbarTitle: some View {
-        Group {
-            if conversation.isChat {
-                Button {
-                    dismissChatKeyboard()
-                    showsChatInfo = true
-                } label: {
-                    chatTitle
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Информация о беседе")
-            } else {
-                Button {
-                    dismissChatKeyboard()
-                    profileToShow = conversation.peer
-                } label: {
-                    chatTitle
-                }
-                .buttonStyle(.plain)
-            }
+        Button {
+            dismissChatKeyboard()
+            showsChatInfo = true
+        } label: {
+            chatTitle
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(conversation.isChat ? "Информация о беседе" : "Информация о переписке")
         .chatToolbarCapsule(animationToken: toolbarCapsuleAnimationToken)
     }
 
@@ -526,7 +514,7 @@ struct ChatView: View {
 
     private var chatInfoNavigationLink: some View {
         NavigationLink(
-            destination: ChatInfoView(conversation: conversation),
+            destination: ChatInfoView(conversation: conversation, selectedMedia: $selectedMedia, owningPost: $owningPost),
             isActive: $showsChatInfo
         ) {
             EmptyView()

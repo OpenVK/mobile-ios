@@ -31,8 +31,13 @@ struct ChatInfoView: View {
     @State private var activeAlert: ActiveAlert?
     @State private var memberToExclude: ChatMember?
     @State private var preview: ChatMaterial?
+    @State private var showsProfile = false
+    @Binding private var selectedMedia: Attachment?
+    @Binding private var owningPost: Post?
 
-    init(conversation: Conversation) {
+    init(conversation: Conversation, selectedMedia: Binding<Attachment?> = .constant(nil), owningPost: Binding<Post?> = .constant(nil)) {
+        _selectedMedia = selectedMedia
+        _owningPost = owningPost
         _model = StateObject(wrappedValue: ChatInfoViewModel(conversation: conversation))
     }
 
@@ -47,7 +52,16 @@ struct ChatInfoView: View {
             sectionContent(model.selectedSection)
         }
         .listStyle(.plain)
-        .navigationTitle("Информация о беседе")
+        .background {
+            NavigationLink(
+                destination: ProfileView(user: model.conversation.peer, selectedMedia: $selectedMedia, owningPost: $owningPost),
+                isActive: $showsProfile
+            ) {
+                EmptyView()
+            }
+            .hidden()
+        }
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .chatTabBarHidden()
         .toolbar {
@@ -143,26 +157,39 @@ struct ChatInfoView: View {
     private var header: some View {
         VStack(spacing: 8) {
             Avatar(
-                user: User(
-                    uid: model.conversation.id,
-                    username: "",
-                    displayName: model.title,
-                    avatarURL: model.photoURL
-                ),
+                user: model.conversation.isChat
+                    ? User(uid: model.conversation.id, username: "", displayName: model.title, avatarURL: model.photoURL)
+                    : model.conversation.peer,
                 size: 92,
-                placeholderImageName: "chat_default_100",
-                isChat: true
+                placeholderImageName: model.conversation.isChat ? "chat_default_100" : nil,
+                isChat: model.conversation.isChat
             )
             .padding(.top, 12)
 
-            Text(model.title)
-                .font(.title3.weight(.semibold))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
+            HStack(spacing: 4) {
+                Text(model.title)
+                    .font(.title3.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                if !model.conversation.isChat {
+                    if model.conversation.peer.isOfficial == true {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(Color.appAccent)
+                            .accessibilityLabel("Подтверждённый аккаунт")
+                    }
+                    SupporterBadgeView(screenName: model.conversation.peer.username)
+                }
+            }
 
-            Text("\(model.memberCount) \(memberCountWord(model.memberCount))")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            if model.conversation.isChat {
+                Text("\(model.memberCount) \(memberCountWord(model.memberCount))")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else if !model.conversation.isGroup {
+                Text(model.conversation.peer.isOnline ? "В сети" : (model.conversation.peer.lastSeen ?? "Не в сети"))
+                    .font(.subheadline)
+                    .foregroundStyle(model.conversation.peer.isOnline ? Color.appAccent : .secondary)
+            }
 
             HStack(spacing: 0) {
                 Button {
@@ -172,10 +199,16 @@ struct ChatInfoView: View {
                 }
                 .accessibilityValue(model.isMuted ? "Выключен" : "Включён")
 
-                Button {
-                    activeAlert = .unavailable
-                } label: {
-                    actionLabel(title: "Поиск", icon: "magnifyingglass")
+                if model.conversation.isChat {
+                    Button {
+                        activeAlert = .unavailable
+                    } label: {
+                        actionLabel(title: "Поиск", icon: "magnifyingglass")
+                    }
+                } else {
+                    Button { showsProfile = true } label: {
+                        actionLabel(title: "Профиль", icon: "person.crop.circle")
+                    }
                 }
 
                 Menu {
@@ -201,15 +234,17 @@ struct ChatInfoView: View {
                     } label: {
                         Label("Очистить историю", systemImage: "bubble.left.and.bubble.right")
                     }
-                    Button(role: .destructive) {
-                        confirmsLeaveChat = true
-                    } label: {
-                        Label("Выйти из беседы", systemImage: "rectangle.portrait.and.arrow.right")
+                    if model.conversation.isChat {
+                        Button(role: .destructive) {
+                            confirmsLeaveChat = true
+                        } label: {
+                            Label("Выйти из беседы", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
                     }
                 } label: {
                     actionLabel(title: "Ещё", icon: "ellipsis")
                 }
-                .accessibilityLabel("Действия с беседой")
+                .accessibilityLabel(model.conversation.isChat ? "Действия с беседой" : "Действия с перепиской")
             }
             .buttonStyle(.plain)
             .padding(.top, 8)
@@ -237,7 +272,7 @@ struct ChatInfoView: View {
     private var sectionPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(ChatMaterialSection.allCases) { section in
+                ForEach(model.availableSections) { section in
                     Button {
                         model.selectedSection = section
                     } label: {
