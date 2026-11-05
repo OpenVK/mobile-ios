@@ -335,18 +335,25 @@ struct ChatView: View {
                 isChat: conversation.isChat
             )
             VStack(alignment: .leading, spacing: 1) {
-                Text(conversation.peer.displayName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(conversation.peer.displayName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                    if !conversation.isChat {
+                        if conversation.peer.isOfficial == true {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color.appAccent)
+                                .accessibilityLabel("Подтверждённый аккаунт")
+                        }
+                        SupporterBadgeView(screenName: conversation.peer.username, size: 14)
+                    }
+                }
                 if let status = longPoll.connectionState.chatSubtitle {
                     Text(status)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                } else if viewModel.isLoading {
-                    Text("Обновление…")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                 } else if let typing = viewModel.typingText {
                     TypingStatusView(text: typing)
                 } else if conversation.isChat, let count = conversation.chatMemberCount {
@@ -368,8 +375,6 @@ struct ChatView: View {
         let subtitle: String
         if let status = longPoll.connectionState.chatSubtitle {
             subtitle = status
-        } else if viewModel.isLoading {
-            subtitle = "Обновление…"
         } else if let typing = viewModel.typingText {
             subtitle = typing
         } else if conversation.isChat, let count = conversation.chatMemberCount {

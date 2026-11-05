@@ -110,7 +110,9 @@ struct MessagesView: View {
                 }
         }
         .onAppear {
-            viewModel.load()
+            if viewModel.conversations.isEmpty {
+                viewModel.load()
+            }
             showFirstArchiveTipIfNeeded()
         }
         .onChange(of: longPoll.connectionState) { state in
@@ -152,9 +154,6 @@ struct MessagesView: View {
     private var toolbarTitle: String {
         if !longPoll.hasNetworkConnection || longPoll.connectionState == .offline || longPoll.connectionState == .stopped {
             return "Подключение…"
-        }
-        if viewModel.isLoading || viewModel.isLoadingMore || viewModel.isSearching || viewModel.isLoadingArchive {
-            return "Обновление…"
         }
         return longPoll.connectionState.title
     }
