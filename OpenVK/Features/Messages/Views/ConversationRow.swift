@@ -120,7 +120,7 @@ struct ConversationRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(conversation.peer.displayName)
-                        .font(.system(size: 15, weight: conversation.unreadCount > 0 ? .semibold : .regular))
+                        .font(.body.weight(conversation.unreadCount > 0 ? .semibold : .regular))
                         .lineLimit(1)
 
                     if conversation.peer.isOfficial == true {
@@ -143,14 +143,14 @@ struct ConversationRow: View {
                             .accessibilityLabel(conversation.lastMessageReadState == 1 ? "Прочитано" : "Не прочитано")
                     }
                     Text(dateText)
-                        .font(.system(size: 11))
+                        .font(.caption2)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
 
                 HStack(spacing: 4) {
                     Text(typingText.map { $0 + String(repeating: ".", count: typingDots) } ?? messagePreview)
-                        .font(.system(size: 14))
+                        .font(.subheadline)
                         .foregroundColor(typingText == nil && conversation.unreadCount > 0 ? .primary : .secondary)
                         .fontWeight(typingText == nil && conversation.unreadCount > 0 ? .medium : .regular)
                         .lineLimit(2)
