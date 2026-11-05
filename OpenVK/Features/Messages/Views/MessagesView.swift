@@ -29,6 +29,14 @@ struct MessagesView: View {
             archiveNavigableContent
                 .navigationTitle(toolbarTitle)
                 .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        if viewModel.hasArchivedConversations {
+                            Button { showsArchive = true } label: {
+                                Image(systemName: "archivebox")
+                            }
+                            .accessibilityLabel("Архив чатов")
+                        }
+                    }
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button {
                             showCreateChat = true
@@ -52,7 +60,7 @@ struct MessagesView: View {
                 .alert("Чат добавлен в архив", isPresented: $showsArchiveTip) {
                     Button("Понятно", role: .cancel) {}
                 } message: {
-                    Text("Чтобы открыть архив, перейдите в начало списка сообщений и потяните его вниз. Вернуться можно кнопкой «Назад» или свайпом от левого края экрана.")
+                    Text("Чтобы открыть архив, нажмите кнопку архива в верхней части списка сообщений. Вернуться можно кнопкой «Назад» или свайпом от левого края экрана.")
                 }
                 .confirmationDialog(
                     "Выйти из беседы?",
@@ -198,9 +206,6 @@ struct MessagesView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
             }
-        }
-        .refreshable {
-            viewModel.refreshArchive()
         }
         .onAppear {
             viewModel.refreshArchive()
@@ -351,13 +356,6 @@ struct MessagesView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .allowsHitTesting(false)
-                }
-            }
-            .refreshable {
-                if viewModel.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    await MainActor.run { showsArchive = true }
-                } else {
-                    await MainActor.run { viewModel.load() }
                 }
             }
         }
