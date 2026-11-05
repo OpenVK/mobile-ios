@@ -614,7 +614,7 @@ final class ChatViewModel: ObservableObject {
         ) { [weak self] result in
             guard let self, case .success(let profiles) = result else { return }
             for profile in profiles {
-                let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
+                let name = (profile.firstName ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 self.typingNames[profile.id] = name.isEmpty
                     ? (profile.screenName ?? "Пользователь \(profile.id)")
