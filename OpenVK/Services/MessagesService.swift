@@ -6,6 +6,9 @@
 import Foundation
 
 protocol MessagesServiceProtocol {
+    func cachedConversations() -> ConversationsPage?
+    func offlineHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> MessagesPage?
+    func cacheConversations(_ page: ConversationsPage)
     func fetchConversations(offset: Int, count: Int, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func fetchConversationsByIDs(_ peerIDs: [Int], completion: @escaping (Result<ConversationsPage, Error>) -> Void)
     func searchConversations(query: String, completion: @escaping (Result<ConversationsPage, Error>) -> Void)
@@ -42,6 +45,59 @@ final class MessagesService: MessagesServiceProtocol {
     static let shared = MessagesService()
 
     private let client: APIClientProtocol
+    private let offlineCacheLock = NSRecursiveLock()
+
+    private var offlineScope: String {
+        "messages.offline.v1.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
+    }
+
+    func cachedConversations() -> ConversationsPage? {
+        guard let data = CacheService.shared.cachedData(for: "\(offlineScope).conversations") else { return nil }
+        return try? JSONDecoder().decode(ConversationsPage.self, from: data)
+    }
+
+    func cacheConversations(_ page: ConversationsPage) {
+        guard let data = try? JSONEncoder().encode(page) else { return }
+        CacheService.shared.cachePermanently(data: data, for: "\(offlineScope).conversations")
+        ImageCache.shared.prefetch(page.conversations.compactMap(\.peer.avatarURL))
+    }
+
+    private func rememberConversations(_ conversations: [Conversation], totalCount: Int? = nil) {
+        offlineCacheLock.lock()
+        defer { offlineCacheLock.unlock() }
+        let isCompleteList = totalCount.map { $0 <= conversations.count } ?? false
+        let old = isCompleteList ? nil : cachedConversations()
+        var byID = Dictionary((old?.conversations ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        for conversation in conversations { byID[conversation.id] = conversation }
+        let all = byID.values.sorted { $0.updatedAt > $1.updatedAt }
+        cacheConversations(ConversationsPage(totalCount: max(totalCount ?? old?.totalCount ?? 0, all.count), conversations: all))
+    }
+
+    private func offlineMessages(peerID: Int) -> [ChatMessage] {
+        guard let data = CacheService.shared.cachedData(for: "\(offlineScope).history.\(peerID)") else { return [] }
+        return (try? JSONDecoder().decode([ChatMessage].self, from: data)) ?? []
+    }
+
+    private func rememberHistory(_ messages: [ChatMessage], peerID: Int) {
+        offlineCacheLock.lock()
+        defer { offlineCacheLock.unlock() }
+        var byID = Dictionary(offlineMessages(peerID: peerID).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        for message in messages where message.id > 0 { byID[message.id] = message }
+        let saved = Array(byID.values.sorted { $0.id < $1.id }.suffix(2_000))
+        guard let data = try? JSONEncoder().encode(saved) else { return }
+        CacheService.shared.cachePermanently(data: data, for: "\(offlineScope).history.\(peerID)")
+    }
+
+    func offlineHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool) -> MessagesPage? {
+        OfflineMessageHistory.page(messages: offlineMessages(peerID: peerID), offset: offset,
+                                   count: count, startMessageID: startMessageID, reverse: reverse)
+    }
+
+    static func isConnectionFailure(_ error: Error) -> Bool {
+        if case APIError.transport = error { return true }
+        if case APIError.http(let status) = error { return status >= 500 }
+        return error is URLError
+    }
 
     init(client: APIClientProtocol = APIClient.shared) {
         self.client = client
@@ -67,6 +123,12 @@ final class MessagesService: MessagesServiceProtocol {
     }
 
     func fetchHistory(peerID: Int, offset: Int = 0, count: Int = 40, startMessageID: Int? = nil, reverse: Bool = false, completion: @escaping (Result<MessagesPage, Error>) -> Void) {
+        let requestScope = offlineScope
+        if !LongPollService.shared.hasNetworkConnection,
+           let page = offlineHistory(peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse) {
+            completion(.success(page))
+            return
+        }
         var parameters = ["peer_id": String(peerID), "offset": String(offset), "count": String(count), "extended": "1"]
         if let startMessageID { parameters["start_message_id"] = String(startMessageID) }
         if reverse { parameters["rev"] = "1" }
@@ -81,9 +143,18 @@ final class MessagesService: MessagesServiceProtocol {
                 let profiles = response.profiles ?? []
                 let items = (response.items ?? []).map { ChatMessage(message: $0, profiles: profiles) }
                 let page = MessagesPage(count: response.count ?? items.count, messages: reverse ? items : Array(items.reversed()))
-                self.cacheHistory(page: page, peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse)
+                if self.offlineScope == requestScope {
+                    self.cacheHistory(page: page, peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse)
+                }
                 completion(.success(page))
-            case .failure(let error): completion(.failure(error))
+            case .failure(let error):
+                if Self.isConnectionFailure(error) { LongPollService.shared.recordConnectionFailure() }
+                if self.offlineScope == requestScope, Self.isConnectionFailure(error),
+                   let page = self.offlineHistory(peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse) {
+                    completion(.success(page))
+                } else {
+                    completion(.failure(error))
+                }
             }
         }
     }
@@ -180,6 +251,7 @@ final class MessagesService: MessagesServiceProtocol {
     func cacheHistory(page: MessagesPage, peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool = false) {
         guard let data = try? JSONEncoder().encode(CachedMessagesPage(count: page.count, messages: page.messages)) else { return }
         CacheService.shared.cachePermanently(data: data, for: historyCacheKey(peerID: peerID, offset: offset, count: count, startMessageID: startMessageID, reverse: reverse))
+        rememberHistory(page.messages, peerID: peerID)
     }
 
     private func cacheStickerPacks(_ packs: [VKStickerPack]) {
@@ -276,6 +348,11 @@ final class MessagesService: MessagesServiceProtocol {
             return
         }
 
+        let requestScope = offlineScope
+        if !LongPollService.shared.hasNetworkConnection, let page = savedSearch(query: value) {
+            completion(.success(page))
+            return
+        }
         client.call(
             method: "messages.searchConversations",
             parameters: [
@@ -293,12 +370,16 @@ final class MessagesService: MessagesServiceProtocol {
                 let conversations = (response.items ?? []).map {
                     self.makeConversation(from: $0, profiles: profiles, groups: groups)
                 }
+                if self.offlineScope == requestScope { self.rememberConversations(conversations) }
                 completion(.success(ConversationsPage(
                     totalCount: response.count ?? conversations.count,
                     conversations: conversations
                 )))
             case .failure(let error):
-                completion(.failure(error))
+                if Self.isConnectionFailure(error) { LongPollService.shared.recordConnectionFailure() }
+                if self.offlineScope == requestScope, Self.isConnectionFailure(error), let page = self.savedSearch(query: value) {
+                    completion(.success(page))
+                } else { completion(.failure(error)) }
             }
         }
     }
@@ -370,6 +451,15 @@ final class MessagesService: MessagesServiceProtocol {
             completion(.success(ConversationsPage(totalCount: 0, conversations: [])))
             return
         }
+        let requestScope = offlineScope
+        let saved = cachedConversations().map { page in
+            let items = page.conversations.filter { peerIDs.contains($0.id) }
+            return ConversationsPage(totalCount: items.count, conversations: items)
+        }
+        if !LongPollService.shared.hasNetworkConnection, let saved {
+            completion(.success(saved))
+            return
+        }
         client.call(
             method: "messages.getConversationsById",
             parameters: [
@@ -387,12 +477,16 @@ final class MessagesService: MessagesServiceProtocol {
                 let conversations = (response.items ?? []).map {
                     self.makeConversation(from: $0, profiles: profiles, groups: groups)
                 }
+                if self.offlineScope == requestScope { self.rememberConversations(conversations) }
                 completion(.success(ConversationsPage(
                     totalCount: response.count ?? conversations.count,
                     conversations: conversations
                 )))
             case .failure(let error):
-                completion(.failure(error))
+                if Self.isConnectionFailure(error) { LongPollService.shared.recordConnectionFailure() }
+                if self.offlineScope == requestScope, Self.isConnectionFailure(error), let saved {
+                    completion(.success(saved))
+                } else { completion(.failure(error)) }
             }
         }
     }
@@ -428,6 +522,11 @@ final class MessagesService: MessagesServiceProtocol {
         count: Int = 30,
         completion: @escaping (Result<ConversationsPage, Error>) -> Void
     ) {
+        let requestScope = offlineScope
+        if !LongPollService.shared.hasNetworkConnection, let saved = savedConversations(offset: offset, count: count) {
+            completion(.success(saved))
+            return
+        }
         let parameters: [String: String] = [
             "offset": String(offset),
             "count": String(count),
@@ -449,14 +548,36 @@ final class MessagesService: MessagesServiceProtocol {
                 let conversations = (response.items ?? []).map {
                     self.makeConversation(from: $0, profiles: profiles, groups: groups)
                 }
+                if self.offlineScope == requestScope {
+                    self.rememberConversations(conversations, totalCount: response.count)
+                }
                 completion(.success(ConversationsPage(
                     totalCount: response.count ?? conversations.count,
                     conversations: conversations
                 )))
             case .failure(let error):
-                completion(.failure(error))
+                if Self.isConnectionFailure(error) { LongPollService.shared.recordConnectionFailure() }
+                if self.offlineScope == requestScope, Self.isConnectionFailure(error),
+                   let saved = self.savedConversations(offset: offset, count: count) {
+                    completion(.success(saved))
+                } else { completion(.failure(error)) }
             }
         }
+    }
+
+    private func savedConversations(offset: Int, count: Int) -> ConversationsPage? {
+        guard let saved = cachedConversations() else { return nil }
+        return ConversationsPage(totalCount: saved.conversations.count,
+                                 conversations: Array(saved.conversations.dropFirst(max(0, offset)).prefix(max(0, count))))
+    }
+
+    private func savedSearch(query: String) -> ConversationsPage? {
+        guard let saved = cachedConversations() else { return nil }
+        let matches = saved.conversations.filter {
+            $0.peer.displayName.localizedCaseInsensitiveContains(query)
+                || $0.lastMessage.localizedCaseInsensitiveContains(query)
+        }
+        return ConversationsPage(totalCount: matches.count, conversations: matches)
     }
 
     private func makeConversation(
@@ -597,4 +718,27 @@ final class MessagesService: MessagesServiceProtocol {
 private struct CachedMessagesPage: Codable {
     let count: Int
     let messages: [ChatMessage]
+}
+
+// The offline snapshot contains downloaded messages only. Counts describe saved
+// messages, so pagination ends at the local boundary without looping on the API.
+enum OfflineMessageHistory {
+    static func page(messages: [ChatMessage], offset: Int, count: Int,
+                     startMessageID: Int?, reverse: Bool) -> MessagesPage? {
+        guard !messages.isEmpty, count > 0 else { return nil }
+        if let anchor = startMessageID {
+            guard let index = messages.firstIndex(where: { $0.id == anchor }) else { return nil }
+            if reverse {
+                let start = min(messages.count, max(0, index + offset))
+                let end = min(messages.count, start + count)
+                return MessagesPage(count: messages.count - index, messages: Array(messages[start..<end]))
+            }
+            let end = min(messages.count, max(0, index + 1 - offset))
+            let start = max(0, end - count)
+            return MessagesPage(count: end + (offset > 0 ? 1 : 0), messages: Array(messages[start..<end]))
+        }
+        let end = max(0, messages.count - max(0, offset))
+        let start = max(0, end - count)
+        return MessagesPage(count: messages.count, messages: Array(messages[start..<end]))
+    }
 }

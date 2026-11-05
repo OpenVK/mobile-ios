@@ -54,7 +54,9 @@ enum ChatArchiveStore {
 }
 
 final class MessagesViewModel: ObservableObject {
-    @Published private(set) var conversations: [Conversation] = []
+    @Published private(set) var conversations: [Conversation] = [] {
+        didSet { persistConversations() }
+    }
     @Published private(set) var isLoading = false
     @Published private(set) var isLoadingMore = false
     @Published private(set) var typingUsersByConversation: [Int: [String]] = [:]
@@ -125,7 +127,9 @@ final class MessagesViewModel: ObservableObject {
                         ChatArchiveStore.contains($0.id)
                     }
                 case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+                    if !MessagesService.isConnectionFailure(error) {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }
@@ -133,6 +137,20 @@ final class MessagesViewModel: ObservableObject {
 
     init(service: MessagesServiceProtocol = MessagesService.shared) {
         self.service = service
+        if let saved = service.cachedConversations() {
+            conversations = saved.conversations
+            totalCount = saved.totalCount
+            currentOffset = conversations.count
+            hasMore = currentOffset < totalCount
+        }
+    }
+
+    private func persistConversations(removing peerID: Int? = nil) {
+        var saved = Dictionary((service.cachedConversations()?.conversations ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        for conversation in conversations { saved[conversation.id] = conversation }
+        if let peerID { saved.removeValue(forKey: peerID) }
+        let items = saved.values.sorted { $0.updatedAt > $1.updatedAt }
+        service.cacheConversations(ConversationsPage(totalCount: max(totalCount, items.count), conversations: items))
     }
 
     func load() {
@@ -140,10 +158,6 @@ final class MessagesViewModel: ObservableObject {
 
         isLoading = true
         errorMessage = nil
-        currentOffset = 0
-        totalCount = 0
-        hasMore = true
-
         service.fetchConversations(offset: 0, count: pageSize) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -158,7 +172,9 @@ final class MessagesViewModel: ObservableObject {
                         !page.conversations.isEmpty
                     self.refreshArchivedConversations()
                 case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+                    if !MessagesService.isConnectionFailure(error) {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }
@@ -196,7 +212,9 @@ final class MessagesViewModel: ObservableObject {
                         }
                     case .failure(let error):
                         self.searchResults = []
-                        self.errorMessage = error.localizedDescription
+                        if !MessagesService.isConnectionFailure(error) {
+                            self.errorMessage = error.localizedDescription
+                        }
                     }
                 }
             }
@@ -450,6 +468,7 @@ final class MessagesViewModel: ObservableObject {
         if conversations.count != oldCount {
             totalCount = max(0, totalCount - 1)
         }
+        persistConversations(removing: conversation.id)
     }
 
     private func loadMore() {
@@ -472,7 +491,9 @@ final class MessagesViewModel: ObservableObject {
                     self.hasMore = self.currentOffset < self.totalCount &&
                         !page.conversations.isEmpty
                 case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+                    if !MessagesService.isConnectionFailure(error) {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }

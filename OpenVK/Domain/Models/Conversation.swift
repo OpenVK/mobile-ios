@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct Conversation: Identifiable, Hashable {
+struct Conversation: Identifiable, Hashable, Codable {
     let id: Int
     let peer: User
     let lastMessage: String
@@ -32,7 +32,7 @@ struct Conversation: Identifiable, Hashable {
     var isGroup: Bool { peer.isGroup == true }
 }
 
-struct ConversationsPage {
+struct ConversationsPage: Codable {
     let totalCount: Int
     let conversations: [Conversation]
 }

@@ -95,9 +95,14 @@ final class ChatViewModel: ObservableObject {
         let anchorID = savedMessageID.flatMap { $0 > 0 ? $0 : nil }
         let initialOffset = anchorID == nil ? 0 : -(pageSize / 2)
         if isInitialLoad,
-           let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false),
+           let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false)
+                ?? service.offlineHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false),
            anchorID == nil || cachedPage.messages.contains(where: { $0.id == anchorID }) {
             applyCachedPage(cachedPage, anchorID: anchorID, savedMessageID: savedMessageID)
+        }
+        if isInitialLoad, messages.isEmpty,
+           let saved = service.offlineHistory(peerID: conversation.id, offset: 0, count: pageSize, startMessageID: nil, reverse: false) {
+            applyCachedPage(saved, anchorID: nil, savedMessageID: nil)
         }
         service.fetchHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false) { [weak self] result in
             guard let self, self.historyRequestToken == requestToken else { return }
@@ -155,7 +160,8 @@ final class ChatViewModel: ObservableObject {
                 if self.historyAnchorID == nil {
                     self.service.markAsRead(peerID: self.conversation.id)
                 }
-            case .failure(let error): self.errorMessage = error.localizedDescription
+            case .failure(let error):
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoading = false
         }
@@ -211,7 +217,8 @@ final class ChatViewModel: ObservableObject {
                 if self.isValidBoundaryPage(page, boundaryID: newestID, newer: true) {
                     self.insertNewer(page)
                 }
-            case .failure(let error): self.errorMessage = error.localizedDescription
+            case .failure(let error):
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoadingNewer = false
         }
@@ -392,6 +399,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendTyping(for text: String) {
+        guard LongPollService.shared.hasNetworkConnection else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard Date().timeIntervalSince(lastTypingSentAt) >= 3 else { return }
         lastTypingSentAt = Date()
@@ -486,7 +494,17 @@ final class ChatViewModel: ObservableObject {
         return conversation.peer.lastSeen ?? "Не в сети"
     }
 
+    func refreshAfterReconnect() {
+        if historyAnchorID != nil {
+            refreshPinnedMessage()
+            _ = loadNewerIfNeeded()
+        } else {
+            load()
+        }
+    }
+
     func startListening() {
+        guard observer == nil else { return }
         observer = NotificationCenter.default.addObserver(forName: .openvkLongPollDidReceiveEvent, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor [weak self] in
                 guard let self, let type = note.userInfo?["type"] as? Int else { return }
@@ -727,7 +745,7 @@ final class ChatViewModel: ObservableObject {
                 self.requestScroll(.bottom(animated: animated))
                 self.service.markAsRead(peerID: self.conversation.id)
             case .failure(let error):
-                self.errorMessage = error.localizedDescription
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoading = false
         }
@@ -752,7 +770,7 @@ final class ChatViewModel: ObservableObject {
                     self.applyPageAround(page, messageID: messageID)
                 }
             case .failure(let error):
-                self.errorMessage = error.localizedDescription
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoading = false
         }
