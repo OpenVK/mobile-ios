@@ -2598,21 +2598,41 @@ private struct MessageBubble: View {
         messageTextWithMetadata(width: bubbleContentWidth)
     }
 
+    // A timestamp may share the line with a short message. For wrapped or
+    // nearly full-width text, use a real trailing row instead of drawing on
+    // top of glyphs (invisible spaces were not a reliable layout reservation).
+    @ViewBuilder
     private func messageTextWithMetadata(width: CGFloat) -> some View {
-        ChatMentionText(
-            text: message.isDeleted ? "Сообщение удалено" : message.text,
-            isOutgoing: message.isOutgoing,
-            isDeleted: message.isDeleted,
-            onMentionTap: onMentionTap,
-            inlineMetadata: metadataSpaceReservation
-        )
-        .frame(width: max(1, width), alignment: .leading)
-        .overlay(alignment: .bottomTrailing) {
-            // The invisible text suffix keeps the last line clear of this
-            // overlay, while the visible metadata always hugs the right edge.
-            messageMetadata
-                .padding(.bottom, 1)
+        if metadataFitsOnOneLine(width: width) {
+            ChatMentionText(
+                text: message.isDeleted ? "Сообщение удалено" : message.text,
+                isOutgoing: message.isOutgoing,
+                isDeleted: message.isDeleted,
+                onMentionTap: onMentionTap,
+                inlineMetadata: metadataSpaceReservation
+            )
+            .frame(width: max(1, width), alignment: .leading)
+            .overlay(alignment: .bottomTrailing) {
+                messageMetadata.padding(.bottom, 1)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                messageText
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    messageMetadata
+                }
+            }
+            .frame(width: max(1, width), alignment: .leading)
         }
+    }
+
+    private func metadataFitsOnOneLine(width: CGFloat) -> Bool {
+        let value = message.isDeleted ? "Сообщение удалено" : message.text
+        guard !value.contains("\n") else { return false }
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        let textWidth = (value as NSString).size(withAttributes: [.font: font]).width
+        return textWidth + metadataSlotWidth + 22 < max(1, width)
     }
 
     private var displayTime: String {

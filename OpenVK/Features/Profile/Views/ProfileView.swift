@@ -24,22 +24,25 @@ struct ProfileView: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-
-                ProfileHeaderView(
-                    user: viewModel.user,
-                    avatarRefreshToken: viewModel.avatarRefreshToken
-                )
-
-                switch viewModel.user.accessStatus {
-                case .deleted, .banned, .blacklistedByThem, .blacklistedByMe, .privateProfile:
-                    SectionSpacer()
-                    ProfileStatusBanner(status: viewModel.user.accessStatus, user: viewModel.user)
-
-                case .active:
-                    SectionSpacer()
-                    profileContent
+        GeometryReader { geometry in
+            ScrollView {
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    tabletProfileContent(availableWidth: geometry.size.width)
+                } else {
+                    LazyVStack(spacing: 0) {
+                        ProfileHeaderView(
+                            user: viewModel.user,
+                            avatarRefreshToken: viewModel.avatarRefreshToken
+                        )
+                        switch viewModel.user.accessStatus {
+                        case .deleted, .banned, .blacklistedByThem, .blacklistedByMe, .privateProfile:
+                            SectionSpacer()
+                            ProfileStatusBanner(status: viewModel.user.accessStatus, user: viewModel.user)
+                        case .active:
+                            SectionSpacer()
+                            profileContent
+                        }
+                    }
                 }
             }
         }
@@ -95,24 +98,51 @@ struct ProfileView: View {
     }
 
     @ViewBuilder
-    private var profileContent: some View {
-        ProfileInfoSection(user: viewModel.user, onTapDetails: {
-            showDetailedInfo = true
-        })
+    private func tabletProfileContent(availableWidth: CGFloat) -> some View {
+        let columnWidth = min(330, max(270, availableWidth * 0.30))
+        HStack(alignment: .top, spacing: 18) {
+            VStack(spacing: 0) {
+                ProfileHeaderView(
+                    user: viewModel.user,
+                    avatarRefreshToken: viewModel.avatarRefreshToken
+                )
+                if viewModel.user.accessStatus == .active {
+                    ProfileInfoSection(user: viewModel.user, onTapDetails: {
+                        showDetailedInfo = true
+                    })
+                }
+            }
+            .frame(width: columnWidth)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
 
-        if viewModel.photoCount > 0 {
-            SectionSpacer()
-            ProfilePhotosSection(
-                photos: viewModel.photos,
-                photoCount: viewModel.photoCount,
-                user: viewModel.user,
-                selectedMedia: $selectedMedia,
-                owningPost: $owningPost
-            )
+            VStack(spacing: 0) {
+                switch viewModel.user.accessStatus {
+                case .deleted, .banned, .blacklistedByThem, .blacklistedByMe, .privateProfile:
+                    ProfileStatusBanner(status: viewModel.user.accessStatus, user: viewModel.user)
+                case .active:
+                    if viewModel.photoCount > 0 {
+                        ProfilePhotosSection(
+                            photos: viewModel.photos,
+                            photoCount: viewModel.photoCount,
+                            user: viewModel.user,
+                            selectedMedia: $selectedMedia,
+                            owningPost: $owningPost
+                        )
+                        SectionSpacer()
+                    }
+                    profileWallContent
+                }
+            }
+            .frame(maxWidth: 720)
+            .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
         }
+        .frame(maxWidth: 1090, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+    }
 
-        SectionSpacer()
-
+    private var profileWallContent: some View {
         ProfileWallSection(
             posts: viewModel.wall,
             isLoadingMore: viewModel.isLoadingMoreWall,
@@ -132,5 +162,27 @@ struct ProfileView: View {
                 viewModel.loadMoreWall()
             }
         )
+    }
+
+    @ViewBuilder
+    private var profileContent: some View {
+        ProfileInfoSection(user: viewModel.user, onTapDetails: {
+            showDetailedInfo = true
+        })
+
+        if viewModel.photoCount > 0 {
+            SectionSpacer()
+            ProfilePhotosSection(
+                photos: viewModel.photos,
+                photoCount: viewModel.photoCount,
+                user: viewModel.user,
+                selectedMedia: $selectedMedia,
+                owningPost: $owningPost
+            )
+        }
+
+        SectionSpacer()
+
+        profileWallContent
     }
 }

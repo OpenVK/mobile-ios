@@ -1226,7 +1226,8 @@ struct GlobalAudioPlayerOverlay: View {
     @State private var dragOffset: CGFloat = 0
     @State private var measuredTabBarInset: CGFloat = 0
 
-    private let miniPlayerHeight: CGFloat = 52
+    private var isTablet: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private var miniPlayerHeight: CGFloat { isTablet ? 96 : 52 }
     private let tabBarBaseHeight: CGFloat = 49
 
     private var isIOS26OrNewer: Bool {
@@ -1246,16 +1247,16 @@ struct GlobalAudioPlayerOverlay: View {
                     ? CGFloat(0)
                     : max(0, globalFrame.maxY - keyboard.endFrame.minY)
                 let effectiveTabBarInset: CGFloat = {
-                    if measuredTabBarInset > 0 {
-                        return measuredTabBarInset
-                    }
+                    // The iPad sidebar replaces the iPhone tab bar.
+                    if isTablet { return bottomInset }
+                    if measuredTabBarInset > 0 { return measuredTabBarInset }
                     let baseBarHeight: CGFloat = isIOS26OrNewer ? 128 : tabBarBaseHeight
                     return baseBarHeight + bottomInset
                 }()
                 let dockInset = keyboardOverlap > 0
                     ? keyboardOverlap
                     : effectiveTabBarInset
-                let floatGap: CGFloat = keyboardOverlap > 0 ? 0 : (isIOS26OrNewer ? 8 : 0)
+                let floatGap: CGFloat = keyboardOverlap > 0 ? 0 : (isTablet ? 8 : (isIOS26OrNewer ? 8 : 0))
                 let collapsedOffset = max(
                     0,
                     geometry.size.height - dockInset - miniPlayerHeight - floatGap
@@ -1664,11 +1665,11 @@ private struct MiniAudioPlayerView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(track.title)
-                        .font(.system(size: 13.5, weight: .semibold))
+                        .font(.system(size: UIDevice.current.userInterfaceIdiom == .pad ? 19 : 13.5, weight: .semibold))
                         .foregroundColor(.primary)
                         .lineLimit(1)
                     Text(track.artist)
-                        .font(.system(size: 11.5, weight: .regular))
+                        .font(.system(size: UIDevice.current.userInterfaceIdiom == .pad ? 15 : 11.5, weight: .regular))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
