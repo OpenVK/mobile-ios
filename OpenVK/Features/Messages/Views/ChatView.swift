@@ -1954,7 +1954,6 @@ private struct ChatMentionText: View {
     let isOutgoing: Bool
     let isDeleted: Bool
     let onMentionTap: (String) -> Void
-    var inlineMetadata: String? = nil
 
     var body: some View {
         Text(attributedText)
@@ -1971,19 +1970,6 @@ private struct ChatMentionText: View {
     }
 
     private var attributedText: AttributedString {
-        var value = mentionAttributedText
-        if let inlineMetadata {
-            // Reserve the last-line width for the timestamp and receipt.
-            // The visible metadata is overlaid at the bubble's trailing edge.
-            var spacer = AttributedString("  " + inlineMetadata)
-            spacer.font = .system(size: 10)
-            spacer.foregroundColor = .clear
-            value.append(spacer)
-        }
-        return value
-    }
-
-    private var mentionAttributedText: AttributedString {
         guard !isDeleted,
               let expression = try? NSRegularExpression(
                 pattern: "\\[([^\\]|]+)\\|([^\\]]+)\\]|@([A-Za-zА-Яа-яЁё0-9_]+)"
@@ -2604,17 +2590,12 @@ private struct MessageBubble: View {
     @ViewBuilder
     private func messageTextWithMetadata(width: CGFloat) -> some View {
         if metadataFitsOnOneLine(width: width) {
-            ChatMentionText(
-                text: message.isDeleted ? "Сообщение удалено" : message.text,
-                isOutgoing: message.isOutgoing,
-                isDeleted: message.isDeleted,
-                onMentionTap: onMentionTap,
-                inlineMetadata: metadataSpaceReservation
-            )
-            .frame(width: max(1, width), alignment: .leading)
-            .overlay(alignment: .bottomTrailing) {
-                messageMetadata.padding(.bottom, 1)
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
+                messageText
+                Spacer(minLength: 0)
+                messageMetadata
             }
+            .frame(width: max(1, width), alignment: .leading)
         } else {
             VStack(alignment: .leading, spacing: 2) {
                 messageText
@@ -2637,15 +2618,6 @@ private struct MessageBubble: View {
 
     private var displayTime: String {
         message.date.formatted(date: .omitted, time: .shortened)
-    }
-
-    private var metadataSpaceReservation: String {
-        // Figure spaces have a predictable width at the same font size used
-        // for the invisible suffix. Reserve the measured metadata width.
-        let font = UIFont.systemFont(ofSize: 10)
-        let figureWidth = max(1, ("\u{2007}" as NSString).size(withAttributes: [.font: font]).width)
-        let count = Int(ceil(metadataSlotWidth / figureWidth))
-        return String(repeating: "\u{2007}", count: max(1, count))
     }
 
     private var metadataSlotWidth: CGFloat {

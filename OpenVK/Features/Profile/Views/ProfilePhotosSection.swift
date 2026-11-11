@@ -54,32 +54,69 @@ struct ProfilePhotosSection: View {
             .padding(.horizontal, 16)
             .padding(.top, 14)
 
-            LazyVGrid(columns: columns, spacing: 2) {
-                ForEach(photos.prefix(6)) { photo in
-                    Button(action: {
-                        openPhotoViewer(for: photo)
-                    }) {
-                        if let url = photo.imageURL {
-                            RemoteImage(url: url, placeholder: Rectangle().fill(Color(.secondarySystemBackground)))
-                                .aspectRatio(1, contentMode: .fill)
-                                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
-                                .aspectRatio(1, contentMode: .fit)
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                // Compact thumbnails for the tablet's wider profile column.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(photos.prefix(10)) { photo in
+                            Button {
+                                openPhotoViewer(for: photo)
+                            } label: {
+                                Group {
+                                    if let url = photo.imageURL {
+                                        RemoteImage(
+                                            url: url,
+                                            placeholder: Rectangle().fill(Color(.secondarySystemBackground))
+                                        )
+                                        .aspectRatio(1, contentMode: .fill)
+                                    } else {
+                                        Rectangle()
+                                            .fill(photo.color.opacity(0.15))
+                                            .overlay {
+                                                Image(systemName: photo.systemName)
+                                                    .font(.system(size: 22))
+                                                    .foregroundColor(photo.color)
+                                            }
+                                    }
+                                }
+                                .frame(width: 112, height: 94)
                                 .clipped()
-                        } else {
-                            Rectangle()
-                                .fill(photo.color.opacity(0.15))
-                                .aspectRatio(1, contentMode: .fit)
-                                .overlay(
-                                    Image(systemName: photo.systemName)
-                                        .font(.system(size: 22))
-                                        .foregroundColor(photo.color)
-                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .buttonStyle(PlainButtonStyle())
+                    .padding(.horizontal, 16)
                 }
+                .padding(.bottom, 14)
+            } else {
+                LazyVGrid(columns: columns, spacing: 2) {
+                    ForEach(photos.prefix(6)) { photo in
+                        Button(action: {
+                            openPhotoViewer(for: photo)
+                        }) {
+                            if let url = photo.imageURL {
+                                RemoteImage(url: url, placeholder: Rectangle().fill(Color(.secondarySystemBackground)))
+                                    .aspectRatio(1, contentMode: .fill)
+                                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .clipped()
+                            } else {
+                                Rectangle()
+                                    .fill(photo.color.opacity(0.15))
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .overlay(
+                                        Image(systemName: photo.systemName)
+                                            .font(.system(size: 22))
+                                            .foregroundColor(photo.color)
+                                    )
+                            }
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .padding(.bottom, 14)
             }
-            .padding(.bottom, 14)
         }
         .background(Color(.systemBackground))
     }

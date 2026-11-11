@@ -75,10 +75,12 @@ struct MessagesView: View {
                     if let conversation = conversationToLeave {
                         Button("Выйти") {
                             viewModel.leaveChat(conversation, deleteChat: false)
+                            if selectedConversation?.id == conversation.id { selectedConversation = nil }
                             conversationToLeave = nil
                         }
                         Button("Выйти и удалить чат", role: .destructive) {
                             viewModel.leaveChat(conversation, deleteChat: true)
+                            if selectedConversation?.id == conversation.id { selectedConversation = nil }
                             conversationToLeave = nil
                         }
                     }
@@ -128,6 +130,13 @@ struct MessagesView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: ChatArchiveStore.didChange)) { _ in
             viewModel.refreshArchive()
+            if let selectedConversation,
+               ChatArchiveStore.contains(selectedConversation.id) {
+                self.selectedConversation = nil
+            }
+        }
+        .onChange(of: splitChats) { enabled in
+            if !enabled { selectedConversation = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openvkLongPollDidReceiveEvent)) { notification in
             let type = notification.userInfo?["type"] as? Int ?? -1
