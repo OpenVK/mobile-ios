@@ -8,6 +8,8 @@ import SwiftUI
 struct MessagesView: View {
     @StateObject private var viewModel = MessagesViewModel()
     @ObservedObject private var longPoll = LongPollService.shared
+    @AppStorage("openvk.ipad.split_chats") private var splitChats = false
+    @State private var selectedConversation: Conversation?
     @State private var showCreateChat = false
     @State private var showsArchive = false
     @State private var showsArchiveTip = false
@@ -216,16 +218,63 @@ struct MessagesView: View {
     @ViewBuilder
     private var archiveNavigableContent: some View {
         if #available(iOS 16.0, *) {
-            content.navigationDestination(isPresented: $showsArchive) {
+            mainMessageContent.navigationDestination(isPresented: $showsArchive) {
                 archivedChats
             }
         } else {
-            content.background(
+            mainMessageContent.background(
                 NavigationLink(destination: archivedChats, isActive: $showsArchive) {
                     EmptyView()
                 }
                 .hidden()
             )
+        }
+    }
+
+    @ViewBuilder
+    private var mainMessageContent: some View {
+        if UIDevice.current.userInterfaceIdiom == .pad && splitChats {
+            tabletSplitContent
+        } else {
+            content
+        }
+    }
+
+    private var tabletSplitContent: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                content
+                    .frame(width: max(280, geometry.size.width * 0.30),
+                           height: geometry.size.height)
+                Divider()
+
+                Group {
+                    if let conversation = selectedConversation {
+                        NavigationView {
+                            ChatView(
+                                conversation: conversation,
+                                selectedMedia: $selectedMedia,
+                                owningPost: $owningPost
+                            )
+                        }
+                        .navigationViewStyle(StackNavigationViewStyle())
+                        .id(conversation.id)
+                    } else {
+                        VStack(spacing: 12) {
+                            Image(systemName: "bubble.left.and.bubble.right")
+                                .font(.system(size: 38))
+                                .foregroundStyle(.secondary)
+                            Text("Выберите диалог")
+                                .font(.title3.weight(.semibold))
+                            Text("Сообщения откроются справа от списка чатов.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -246,17 +295,36 @@ struct MessagesView: View {
         } else {
             List {
                 ForEach(viewModel.displayedConversations) { conversation in
-                    NavigationLink {
-                        ChatView(
-                            conversation: conversation,
-                            selectedMedia: $selectedMedia,
-                            owningPost: $owningPost
-                        )
-                    } label: {
-                        ConversationRow(
-                            conversation: conversation,
-                            typingText: viewModel.typingText(for: conversation)
-                        )
+                    Group {
+                        if UIDevice.current.userInterfaceIdiom == .pad && splitChats {
+                            Button {
+                                selectedConversation = conversation
+                            } label: {
+                                ConversationRow(
+                                    conversation: conversation,
+                                    typingText: viewModel.typingText(for: conversation)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(
+                                selectedConversation?.id == conversation.id
+                                    ? Color.appAccent.opacity(0.12)
+                                    : Color.clear
+                            )
+                        } else {
+                            NavigationLink {
+                                ChatView(
+                                    conversation: conversation,
+                                    selectedMedia: $selectedMedia,
+                                    owningPost: $owningPost
+                                )
+                            } label: {
+                                ConversationRow(
+                                    conversation: conversation,
+                                    typingText: viewModel.typingText(for: conversation)
+                                )
+                            }
+                        }
                     }
                     .contextMenu {
                         Button {
