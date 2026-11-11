@@ -1238,12 +1238,12 @@ struct MediaFullScreenViewer: View {
         let isLiked: Bool
         
         switch current {
-        case .remoteImage(let url, let id, let owner, let likes, let comments, let reposts, let liked):
+        case .remoteImage(_, let id, let owner, _, _, _, let liked):
             typeString = "photo"
             itemID = id
             ownerID = owner
             isLiked = liked
-        case .remoteVideo(let title, let duration, let imageURL, let videoURL, let id, let owner, let files, let likes, let comments, let reposts, let liked):
+        case .remoteVideo(_, _, _, _, let id, let owner, _, _, _, _, let liked):
             typeString = "video"
             itemID = id
             ownerID = owner
@@ -1289,7 +1289,7 @@ struct MediaFullScreenViewer: View {
         guard selectedIndex < currentAttachments.count else { return }
         let current = currentAttachments[selectedIndex]
         switch current {
-        case .remoteImage(let url, let id, let owner, var likes, let comments, let reposts, let liked):
+        case .remoteImage(let url, let id, let owner, var likes, let comments, let reposts, _):
             let diff = isLiked ? 1 : -1
             likes = max(0, likes + diff)
             currentAttachments[selectedIndex] = .remoteImage(
@@ -1301,7 +1301,7 @@ struct MediaFullScreenViewer: View {
                 repostsCount: reposts,
                 isLiked: isLiked
             )
-        case .remoteVideo(let title, let duration, let imageURL, let videoURL, let id, let owner, let files, var likes, let comments, let reposts, let liked):
+        case .remoteVideo(let title, let duration, let imageURL, let videoURL, let id, let owner, let files, var likes, let comments, let reposts, _):
             let diff = isLiked ? 1 : -1
             likes = max(0, likes + diff)
             currentAttachments[selectedIndex] = .remoteVideo(
@@ -2367,7 +2367,7 @@ struct MediaCommentsView: View {
                     }
                 }
                 
-                if let edit = viewModel.editingComment {
+                if viewModel.editingComment != nil {
                     HStack {
                         Image(systemName: "pencil")
                             .font(.system(size: 10))

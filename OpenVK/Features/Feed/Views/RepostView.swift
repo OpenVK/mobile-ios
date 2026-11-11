@@ -556,7 +556,7 @@ struct RepostView: View {
         ) { result in
             sendingPeerID = nil
             switch result {
-            case .success(let repostsCount):
+            case .success:
                 HapticManager.impact(.medium)
                 sentPeerIDs.insert(group.id)
             case .failure(let error):

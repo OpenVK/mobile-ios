@@ -138,10 +138,12 @@ final class LongPollService: ObservableObject {
         }
     }
 
+    @MainActor
     private func listenLoop(runID: UUID) async {
+        // Keep mutable state on the main actor. Network awaits do not block
+        // the UI; the run ID prevents an old loop clearing a newer task.
         defer {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.runID == runID else { return }
+            if self.runID == runID {
                 self.task = nil
             }
         }

@@ -769,15 +769,17 @@ private struct ChatAvatarPickerView: View {
     @State private var selectedAvatar: PhotosPickerItem?
 
     var body: some View {
-        PhotosPicker(selection: $selectedAvatar, matching: .images) {
+        // Read main-actor-isolated model data before PhotosPicker's label closure.
+        let previewUser = User(
+            uid: model.conversation.id,
+            username: "",
+            displayName: model.title,
+            avatarURL: model.photoURL
+        )
+        return PhotosPicker(selection: $selectedAvatar, matching: .images) {
             VStack(spacing: 8) {
                 Avatar(
-                    user: User(
-                        uid: model.conversation.id,
-                        username: "",
-                        displayName: model.title,
-                        avatarURL: model.photoURL
-                    ),
+                    user: previewUser,
                     size: 82,
                     placeholderImageName: "chat_default_100",
                     isChat: true

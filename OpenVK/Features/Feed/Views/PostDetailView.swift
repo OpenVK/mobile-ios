@@ -100,7 +100,7 @@ struct PostDetailView: View {
                 }
             }
 
-            if let edit = viewModel.editingComment {
+            if viewModel.editingComment != nil {
                 HStack {
                     Image(systemName: "pencil")
                         .font(.system(size: 10))
