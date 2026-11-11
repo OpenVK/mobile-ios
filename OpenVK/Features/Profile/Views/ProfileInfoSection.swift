@@ -13,11 +13,11 @@ struct ProfileInfoSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if user.isGroup == true {
-                if let about = user.about, !about.isEmpty {
+                if let about = user.about?.trimmingCharacters(in: .whitespacesAndNewlines), !about.isEmpty {
                     ProfileInfoRow(icon: "doc.text", text: about)
                     Divider().padding(.leading, 44)
                 }
-                if let site = user.site, !site.isEmpty {
+                if let site = user.site?.trimmingCharacters(in: .whitespacesAndNewlines), !site.isEmpty {
                     Button(action: {
                         if let url = URL(string: site) {
                             UIApplication.shared.open(url)
@@ -29,7 +29,7 @@ struct ProfileInfoSection: View {
                     Divider().padding(.leading, 44)
                 }
             } else {
-                if let city = user.city {
+                if let city = user.city?.trimmingCharacters(in: .whitespacesAndNewlines), !city.isEmpty {
                     ProfileInfoRow(icon: "house", text: "\(L10n.Profile.cityPrefix) \(city)")
                     Divider().padding(.leading, 44)
                 }

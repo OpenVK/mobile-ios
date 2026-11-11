@@ -191,39 +191,37 @@ struct PostCard: View {
             
             actions
             
-            if showCommentPreview && post.comments > 0 {
-                ZStack(alignment: .top) {
-                    if let lastComment = lastComment {
-                        HStack(alignment: .top, spacing: 8) {
+            // Do not reserve space for a comment that hasn't been loaded
+            // (or doesn't exist). A fixed 62 pt placeholder left a large
+            // blank region between the action buttons and the next post.
+            if showCommentPreview && post.comments > 0, let lastComment = lastComment {
+                HStack(alignment: .top, spacing: 8) {
                     Avatar(user: lastComment.author, size: 28)
-                    
+
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 4) {
                             Text(lastComment.author.displayName)
                                 .font(.system(size: 13, weight: .semibold))
                                 .foregroundColor(.primary)
-                            
+
                             Spacer()
-                            
+
                             Text(lastComment.dateString)
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
                         }
-                        
+
                         Text(lastComment.text)
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                     }
-                        }
-                        .padding(10)
-                        .background(Color(.secondarySystemBackground).opacity(0.5))
-                        .cornerRadius(8)
-                        .padding(.horizontal, 16)
-                    }
                 }
-                .frame(height: 62, alignment: .top)
+                .padding(10)
+                .background(Color(.secondarySystemBackground).opacity(0.5))
+                .cornerRadius(8)
+                .padding(.horizontal, 16)
                 .padding(.bottom, 12)
             }
         }
