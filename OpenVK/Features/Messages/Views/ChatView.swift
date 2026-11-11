@@ -349,14 +349,34 @@ struct ChatView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else if let presence = viewModel.peerPresenceText {
-                    Text(presence)
-                        .font(.caption2)
-                        .foregroundStyle(viewModel.isPeerOnline ? Color.appAccent : .secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(presence)
+                            .lineLimit(1)
+                        if let symbol = onlineDeviceSymbol {
+                            Image(systemName: symbol)
+                                .accessibilityLabel("Устройство: \(conversation.peer.onlinePlatform ?? "неизвестно")")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(viewModel.isPeerOnline ? Color.appAccent : .secondary)
                 }
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private var onlineDeviceSymbol: String? {
+        guard viewModel.isPeerOnline, !conversation.isChat,
+              let platform = conversation.peer.onlinePlatform?.lowercased() else { return nil }
+        if platform.contains("android") { return "rectangle.portrait" }
+        if platform.contains("ipad") || platform.contains("tablet") { return "ipad" }
+        if platform.contains("iphone") || platform.contains("ios") || platform.contains("mobile") {
+            return "iphone"
+        }
+        if platform.contains("mac") || platform.contains("laptop") { return "laptopcomputer" }
+        if platform.contains("web") || platform.contains("desktop") || platform.contains("windows")
+            || platform.contains("linux") { return "desktopcomputer" }
+        return "cpu"
     }
 
     private var toolbarCapsuleAnimationToken: String {
@@ -2384,11 +2404,11 @@ private struct MessageBubble: View {
 
     private var attachmentBubbleShape: MessageBubbleShape {
         MessageBubbleShape(
-            topLeadingRadius: 18,
-            topTrailingRadius: 18,
-            bottomLeadingRadius: message.isOutgoing ? 18 : 6,
-            bottomTrailingRadius: message.isOutgoing ? 6 : 18,
-            hasTail: false,
+            topLeadingRadius: !message.isOutgoing && joinsPrevious ? 6 : 18,
+            topTrailingRadius: message.isOutgoing && joinsPrevious ? 6 : 18,
+            bottomLeadingRadius: !message.isOutgoing && joinsNext ? 6 : 18,
+            bottomTrailingRadius: message.isOutgoing && joinsNext ? 6 : 18,
+            hasTail: !joinsNext,
             isOutgoing: message.isOutgoing
         )
     }
@@ -2421,17 +2441,7 @@ private struct MessageBubble: View {
         .foregroundStyle(message.isOutgoing ? .white : .primary)
         .padding(.horizontal, 13)
         .padding(.vertical, 9)
-        .background(
-            message.isOutgoing ? Color.appAccent : Color(.secondarySystemBackground),
-            in: MessageBubbleShape(
-                topLeadingRadius: 18,
-                topTrailingRadius: 18,
-                bottomLeadingRadius: message.isOutgoing ? 18 : 6,
-                bottomTrailingRadius: message.isOutgoing ? 6 : 18,
-                hasTail: false,
-                isOutgoing: message.isOutgoing
-            )
-        )
+        .background(attachmentBubbleColor, in: attachmentBubbleShape)
     }
 
     private var bubbleContentWidth: CGFloat {
@@ -3167,34 +3177,42 @@ private struct ChatPhotoCollage: View {
     }
 
     private var photoGrid: some View {
-        let columns = Array(
-            repeating: GridItem(.flexible(minimum: 0), spacing: spacing),
-            count: columnCount
-        )
-        let cellHeight: CGFloat = {
-            switch visiblePhotos.count {
-            case 2: return 180
-            case 3, 4: return 145
-            default: return 100
+        VStack(spacing: spacing) {
+            ForEach(0..<((visiblePhotos.count + columnCount - 1) / columnCount), id: \.self) { row in
+                photoGridRow(startIndex: row * columnCount)
             }
-        }()
+        }
+        .frame(width: width, alignment: .leading)
+    }
 
-        return LazyVGrid(columns: columns, spacing: spacing) {
-            ForEach(visiblePhotos) { photo in
+    private func photoGridRow(startIndex: Int) -> some View {
+        let row = Array(visiblePhotos[startIndex..<min(startIndex + columnCount, visiblePhotos.count)])
+        let cellWidth = max(1, (width - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount))
+        // Keep a common row height, but derive it from the actual aspect ratios.
+        // Unlike fixed-height cells, portrait groups stay taller than panoramas.
+        let meanRatio = row.reduce(CGFloat(0)) { sum, photo in
+            sum + min(max(CGFloat(photo.aspectRatio), 0.45), 3.0)
+        } / CGFloat(max(row.count, 1))
+        let cellHeight = min(max(cellWidth / max(meanRatio, 0.45), 85), 240)
+
+        return HStack(spacing: spacing) {
+            ForEach(row) { photo in
                 Button { onTap(photo) } label: {
                     CachedRemoteImage(url: photo.url, contentMode: .fill) {
                         Color(.secondarySystemBackground)
                             .overlay { ProgressView() }
                     }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: cellHeight)
+                    .frame(width: cellWidth, height: cellHeight)
                     .clipped()
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
+            if row.count < columnCount {
+                Spacer(minLength: 0)
+            }
         }
-        .frame(width: width)
+        .frame(width: width, alignment: .leading)
     }
 }
 

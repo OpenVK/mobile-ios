@@ -482,12 +482,7 @@ final class ChatViewModel: ObservableObject {
 
     var peerPresenceText: String? {
         guard !conversation.isChat, !conversation.isGroup else { return nil }
-        if isPeerOnline {
-            if let platform = conversation.peer.onlinePlatform, !platform.isEmpty {
-                return "В сети · \(platform)"
-            }
-            return "В сети"
-        }
+        if isPeerOnline { return "В сети" }
         if let peerLastSeen {
             return peerLastSeen.openvkLastSeen(sex: conversation.peer.sex)
         }
