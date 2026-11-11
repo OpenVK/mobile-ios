@@ -3618,3 +3618,526 @@ private struct MessageBubbleShape: Shape {
         return path
     }
 }
+
+
+// The attachment browser intentionally reuses public VK API responses already
+// used elsewhere in the client. It does not call internal IM endpoints.
+private enum ChatAttachmentSection: String, CaseIterable, Identifiable {
+    case media, photos, videos, documents, audio, graffiti
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .media: return "Медиа"
+        case .photos: return "Фото OVK"
+        case .videos: return "Видео OVK"
+        case .documents: return "Документы"
+        case .audio: return "Аудио"
+        case .graffiti: return "Граффити"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .media: return "photo.on.rectangle.angled"
+        case .photos: return "photo.stack"
+        case .videos: return "play.rectangle"
+        case .documents: return "doc"
+        case .audio: return "music.note"
+        case .graffiti: return "scribble.variable"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .media: return "Фото и видео с устройства"
+        case .photos: return "Ваши фотографии OpenVK"
+        case .videos: return "Ваши видеозаписи OpenVK"
+        case .documents: return "Мои документы и загрузка файлов"
+        case .audio: return "Ваша музыка OpenVK"
+        case .graffiti: return "Создать рисунок"
+        }
+    }
+}
+
+private struct ChatAttachmentChoice: Identifiable, Hashable {
+    let token: String
+    let title: String
+    let detail: String?
+    let thumbnailURL: URL?
+    let icon: String
+
+    var id: String { token }
+
+    static func attachmentToken(type: String, ownerID: Int, id: Int, accessKey: String? = nil) -> String {
+        let base = "\(type)\(ownerID)_\(id)"
+        guard let key = accessKey, !key.isEmpty else { return base }
+        return base + "_\(key)"
+    }
+}
+
+private final class ChatAttachmentLibrary: ObservableObject {
+    @Published private(set) var items: [ChatAttachmentChoice] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var errorText: String?
+    private var loadGeneration = UUID()
+
+    func load(_ section: ChatAttachmentSection) {
+        let generation = UUID()
+        loadGeneration = generation
+        items = []
+        errorText = nil
+        guard let accountID = AuthService.shared.currentUser?.uid, accountID > 0 else {
+            errorText = "Войдите в аккаунт, чтобы выбрать вложения."
+            return
+        }
+        isLoading = true
+
+        switch section {
+        case .photos:
+            APIClient.shared.call(
+                method: "photos.getAll",
+                parameters: ["owner_id": String(accountID), "count": "100", "photo_sizes": "1"],
+                httpMethod: "GET",
+                as: VKPhotosResponse.self
+            ) { [weak self] result in
+                let mapped = result.map { response in
+                    (response.items ?? []).compactMap { photo -> ChatAttachmentChoice? in
+                        guard let id = photo.id, let owner = photo.ownerId else { return nil }
+                        let source = photo.sizes?.array.max(by: { ($0.width ?? 0) < ($1.width ?? 0) })
+                        let url = (source?.url ?? source?.src).flatMap(URL.init(string:))
+                        return ChatAttachmentChoice(
+                            token: .attachmentToken(type: "photo", ownerID: owner, id: id),
+                            title: "Фотография \(id)", detail: nil, thumbnailURL: url, icon: "photo"
+                        )
+                    }
+                }
+                self?.finish(result: mapped.mapError { $0 as Error }, generation: generation)
+            }
+        case .videos:
+            APIClient.shared.call(
+                method: "video.get",
+                parameters: ["owner_id": String(accountID), "count": "100"],
+                httpMethod: "GET",
+                as: VKVideosResponse.self
+            ) { [weak self] result in
+                let mapped = result.map { response in
+                    (response.items ?? []).compactMap { video -> ChatAttachmentChoice? in
+                        guard let id = video.id, let owner = video.ownerId else { return nil }
+                        return ChatAttachmentChoice(
+                            token: .attachmentToken(type: "video", ownerID: owner, id: id),
+                            title: video.title ?? "Видео", detail: nil,
+                            thumbnailURL: (video.image?.last?.url ?? video.image?.first?.url).flatMap(URL.init(string:)),
+                            icon: "play.rectangle"
+                        )
+                    }
+                }
+                self?.finish(result: mapped.mapError { $0 as Error }, generation: generation)
+            }
+        case .documents:
+            DocumentsService.shared.fetchMyDocuments(offset: 0, count: 100) { [weak self] result in
+                let mapped = result.map { docs in
+                    docs.map { doc in
+                        ChatAttachmentChoice(
+                            token: .attachmentToken(type: "doc", ownerID: doc.ownerID, id: doc.id, accessKey: doc.accessKey),
+                            title: doc.title, detail: doc.formattedSize, thumbnailURL: nil,
+                            icon: DocumentTypeAppearance.iconName(for: doc.ext)
+                        )
+                    }
+                }
+                self?.finish(result: mapped, generation: generation)
+            }
+        case .audio:
+            AudioService.shared.getTracks(ownerID: accountID, count: 100) { [weak self] result in
+                let mapped = result.map { tracks in
+                    tracks.compactMap { track -> ChatAttachmentChoice? in
+                        guard let id = track.vkID, let owner = track.ownerID else { return nil }
+                        return ChatAttachmentChoice(
+                            token: .attachmentToken(type: "audio", ownerID: owner, id: id),
+                            title: track.title, detail: track.artist, thumbnailURL: track.artworkURL.flatMap(URL.init(string:)),
+                            icon: "music.note"
+                        )
+                    }
+                }
+                self?.finish(result: mapped.mapError { $0 as Error }, generation: generation)
+            }
+        case .media, .graffiti:
+            isLoading = false
+        }
+    }
+
+    private func finish(result: Result<[ChatAttachmentChoice], Error>, generation: UUID) {
+        DispatchQueue.main.async {
+            guard self.loadGeneration == generation else { return }
+            self.isLoading = false
+            switch result {
+            case .success(let items): self.items = items
+            case .failure(let error): self.errorText = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ChatAttachmentPickerSheet: View {
+    let remainingSlots: Int
+    let onDeviceMedia: () -> Void
+    let onSelect: ([ChatAttachmentChoice]) -> Void
+    let onGraffiti: (PendingChatPhoto) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var library = ChatAttachmentLibrary()
+    @State private var section: ChatAttachmentSection?
+    @State private var selection: [ChatAttachmentChoice] = []
+    @State private var importingDocument = false
+    @State private var uploadingDocument = false
+    @State private var uploadError: String?
+    @State private var drawing = PKDrawing()
+    @State private var ink = UIColor.black
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if let section {
+                    if section == .graffiti {
+                        graffitiEditor
+                    } else {
+                        libraryContent
+                    }
+                } else {
+                    categoryList
+                }
+            }
+            .navigationBarTitle(section?.title ?? "Вложения", displayMode: .inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if section != nil {
+                        Button("Назад") { section = nil }
+                    } else {
+                        Button("Закрыть") { dismiss() }
+                    }
+                }
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if section == .documents {
+                        Button {
+                            importingDocument = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .disabled(uploadingDocument)
+                        .accessibilityLabel("Загрузить документ")
+                    }
+                    if section != nil && section != .graffiti && !selection.isEmpty {
+                        Button("Добавить \(selection.count)") { onSelect(selection) }
+                            .disabled(selection.count > remainingSlots)
+                    }
+                }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+        .fileImporter(isPresented: $importingDocument, allowedContentTypes: [.item]) { result in
+            switch result {
+            case .success(let url): uploadDocument(url)
+            case .failure(let error): uploadError = error.localizedDescription
+            }
+        }
+        .alert("Загрузка документа", isPresented: Binding(
+            get: { uploadError != nil },
+            set: { if !$0 { uploadError = nil } }
+        )) {
+            Button("ОК", role: .cancel) { uploadError = nil }
+        } message: {
+            Text(uploadError ?? "")
+        }
+    }
+
+    private var categoryList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(ChatAttachmentSection.allCases) { category in
+                    Button {
+                        if category == .media {
+                            onDeviceMedia()
+                        } else {
+                            section = category
+                            selection = []
+                            if category != .graffiti { library.load(category) }
+                        }
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: category.icon)
+                                .font(.system(size: 23))
+                                .foregroundColor(.appAccent)
+                                .frame(width: 42, height: 42)
+                                .background(Color.appAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(category.title).font(.body.weight(.medium)).foregroundStyle(.primary)
+                                Text(category.description).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if category != .graffiti { Divider().padding(.leading, 74) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var libraryContent: some View {
+        if library.isLoading || uploadingDocument {
+            ProgressView(uploadingDocument ? "Загрузка документа..." : "Загрузка...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = library.errorText {
+            VStack(spacing: 12) {
+                Text(error).multilineTextAlignment(.center)
+                Button("Повторить") {
+                    if let section { library.load(section) }
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if library.items.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: section?.icon ?? "tray")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.secondary)
+                Text("Здесь пока ничего нет")
+                if section == .documents {
+                    Text("Нажмите + для загрузки документа")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(library.items) { item in
+                Button { toggle(item) } label: {
+                    HStack(spacing: 12) {
+                        if let url = item.thumbnailURL {
+                            CachedRemoteImage(url: url, contentMode: .fill) {
+                                Image(systemName: item.icon)
+                            }
+                            .frame(width: 48, height: 48)
+                            .clipped()
+                            .cornerRadius(7)
+                        } else {
+                            Image(systemName: item.icon)
+                                .font(.system(size: 22))
+                                .foregroundColor(.appAccent)
+                                .frame(width: 48, height: 48)
+                                .background(Color.appAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).foregroundStyle(.primary).lineLimit(2)
+                            if let detail = item.detail {
+                                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: selection.contains(item) ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 22))
+                            .foregroundColor(selection.contains(item) ? .appAccent : .secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+        }
+    }
+
+    private func toggle(_ item: ChatAttachmentChoice) {
+        if selection.contains(item) {
+            selection.removeAll { $0.id == item.id }
+        } else if selection.count < remainingSlots {
+            selection.append(item)
+        }
+    }
+
+    private var graffitiEditor: some View {
+        VStack(spacing: 14) {
+            ChatGraffitiCanvas(drawing: $drawing, ink: ink)
+                .frame(maxWidth: .infinity)
+                .frame(height: 280)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 12)
+
+            HStack(spacing: 16) {
+                ForEach([UIColor.black, .red, .blue, .green], id: \.description) { color in
+                    Button { ink = color } label: {
+                        Circle()
+                            .fill(Color(color))
+                            .frame(width: 30, height: 30)
+                            .overlay(Circle().stroke(.gray.opacity(0.4), lineWidth: 1))
+                    }
+                }
+                Spacer()
+                Button("Очистить") { drawing = PKDrawing() }
+            }
+            .padding(.horizontal, 20)
+
+            Button("Добавить граффити") { saveGraffiti() }
+                .buttonStyle(.borderedProminent)
+                .disabled(drawing.bounds.isEmpty || remainingSlots == 0)
+            Text("Рисунок отправляется как фотография, поскольку API сообщений не поддерживает отдельный тип граффити.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+            Spacer()
+        }
+        .padding(.top, 16)
+    }
+
+    private func saveGraffiti() {
+        let size = CGSize(width: 600, height: 400)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            drawing.image(from: CGRect(origin: .zero, size: size), scale: 1).draw(in: CGRect(origin: .zero, size: size))
+        }
+        guard let data = image.jpegData(compressionQuality: 0.87) else { return }
+        onGraffiti(PendingChatPhoto(thumbnail: image, data: data))
+    }
+
+    private func uploadDocument(_ url: URL) {
+        uploadingDocument = true
+        ChatAttachmentDocumentUploader.upload(url: url) { result in
+            uploadingDocument = false
+            switch result {
+            case .success(let item):
+                selection.append(item)
+                if let section { library.load(section) }
+            case .failure(let error):
+                uploadError = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ChatGraffitiCanvas: UIViewRepresentable {
+    @Binding var drawing: PKDrawing
+    let ink: UIColor
+
+    func makeUIView(context: Context) -> PKCanvasView {
+        let canvas = PKCanvasView()
+        canvas.delegate = context.coordinator
+        canvas.backgroundColor = .white
+        canvas.isOpaque = true
+        canvas.drawingPolicy = .anyInput
+        canvas.tool = PKInkingTool(.pen, color: ink, width: 5)
+        return canvas
+    }
+
+    func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        if canvas.drawing != drawing { canvas.drawing = drawing }
+        canvas.tool = PKInkingTool(.pen, color: ink, width: 5)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject, PKCanvasViewDelegate {
+        var parent: ChatGraffitiCanvas
+        init(parent: ChatGraffitiCanvas) { self.parent = parent }
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            parent.drawing = canvasView.drawing
+        }
+    }
+}
+
+private enum ChatAttachmentDocumentUploadError: LocalizedError {
+    case unavailable, fileTooLarge, malformedResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Текущий сервер OpenVK не поддерживает загрузку документов через API (docs.getUploadServer/docs.save). Вы можете прикрепить уже загруженный документ."
+        case .fileTooLarge: return "Файл превышает ограничение 20 МБ."
+        case .malformedResponse: return "Сервер вернул некорректный результат загрузки."
+        }
+    }
+}
+
+private struct ChatAttachmentDocumentUploader {
+    private struct UploadServer: Decodable { let uploadUrl: String }
+    private struct UploadResponse: Decodable { let file: String }
+
+    static func upload(url: URL, completion: @escaping (Result<ChatAttachmentChoice, Error>) -> Void) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+
+        do {
+            let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard fileSize <= 20 * 1024 * 1024 else {
+                completion(.failure(ChatAttachmentDocumentUploadError.fileTooLarge))
+                return
+            }
+            let data = try Data(contentsOf: url)
+            let name = url.lastPathComponent.replacingOccurrences(of: "\"", with: "")
+            Task {
+                do {
+                    // OpenVK currently returns 0 for this method. The flow is
+                    // ready for servers implementing VK's upload endpoint.
+                    let uploadServer = try await APIClient.shared.call(
+                        method: "docs.getUploadServer", parameters: [:],
+                        httpMethod: "GET", as: UploadServer.self
+                    )
+                    guard let endpoint = URL(string: uploadServer.uploadUrl) else {
+                        throw ChatAttachmentDocumentUploadError.unavailable
+                    }
+                    let boundary = "OpenVK-\(UUID().uuidString)"
+                    var request = URLRequest(url: endpoint)
+                    request.httpMethod = "POST"
+                    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+                    var body = Data()
+                    body.append(contentsOf: "--\(boundary)\r\n".utf8)
+                    body.append(contentsOf: "Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n".utf8)
+                    body.append(contentsOf: "Content-Type: application/octet-stream\r\n\r\n".utf8)
+                    body.append(data)
+                    body.append(contentsOf: "\r\n--\(boundary)--\r\n".utf8)
+                    request.httpBody = body
+                    let (uploaded, response) = try await URLSession.shared.data(for: request)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                        throw ChatAttachmentDocumentUploadError.malformedResponse
+                    }
+                    let file = try JSONDecoder().decode(UploadResponse.self, from: uploaded)
+                    let saved: [VKDocumentItem] = try await APIClient.shared.call(
+                        method: "docs.save",
+                        parameters: ["file": file.file, "title": name, "tags": ""],
+                        httpMethod: "POST", as: [VKDocumentItem].self
+                    )
+                    guard let item = saved.first, let id = item.id, let owner = item.ownerId else {
+                        throw ChatAttachmentDocumentUploadError.malformedResponse
+                    }
+                    let choice = ChatAttachmentChoice(
+                        token: .attachmentToken(type: "doc", ownerID: owner, id: id, accessKey: item.accessKey),
+                        title: item.title ?? name, detail: nil, thumbnailURL: nil,
+                        icon: DocumentTypeAppearance.iconName(for: item.ext ?? "")
+                    )
+                    await MainActor.run { completion(.success(choice)) }
+                } catch {
+                    await MainActor.run {
+                        // Server method stubs return numeric 0; decoding fails.
+                        let mapped: Error
+                        if error is DecodingError {
+                            mapped = ChatAttachmentDocumentUploadError.unavailable
+                        } else { mapped = error }
+                        completion(.failure(mapped))
+                    }
+                }
+            }
+        } catch {
+            completion(.failure(error))
+        }
+    }
+}
