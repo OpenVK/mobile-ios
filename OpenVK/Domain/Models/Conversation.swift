@@ -157,10 +157,17 @@ struct ChatGift: Hashable, Codable {
     let caption: String?
 
     init(_ gift: VKMessageGiftAttachment?) {
-        let url = gift?.gift?.thumb256 ?? gift?.thumb256
-            ?? gift?.gift?.thumb96 ?? gift?.thumb96
-            ?? gift?.gift?.thumb48 ?? gift?.thumb48
-        previewURL = url.flatMap(URL.init(string:))
+        let nested = gift?.gift
+        let thumbnailCandidates: [String?] = [
+            nested?.thumb256,
+            gift?.thumb256,
+            nested?.thumb96,
+            gift?.thumb96,
+            nested?.thumb48,
+            gift?.thumb48
+        ]
+        let thumbnailURL: String? = thumbnailCandidates.compactMap { $0 }.first
+        previewURL = thumbnailURL.flatMap { URL(string: $0) }
         caption = gift?.message?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
