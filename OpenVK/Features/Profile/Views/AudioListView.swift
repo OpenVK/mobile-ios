@@ -1638,6 +1638,9 @@ private struct MiniAudioPlayerView: View {
     @ObservedObject private var player = AudioPlayerService.shared
     @ObservedObject private var membership = AudioLibraryMembership.shared
 
+    private var isTablet: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private var buttonSize: CGFloat { isTablet ? 48 : 32 }
+
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -1687,10 +1690,10 @@ private struct MiniAudioPlayerView: View {
                             .scaleEffect(0.7)
                     } else {
                         Image(systemName: membership.isAdded(track) ? "checkmark" : "plus")
-                            .font(.system(size: isIOS26 ? 16 : 15, weight: .semibold))
+                            .font(.system(size: isTablet ? 24 : (isIOS26 ? 16 : 15), weight: .semibold))
                     }
                 }
-                .frame(width: 32, height: 32)
+                .frame(width: buttonSize, height: buttonSize)
                 .contentShape(Rectangle())
             }
             .buttonStyle(MiniPlayerButtonStyle())
@@ -1699,15 +1702,15 @@ private struct MiniAudioPlayerView: View {
 
             if player.isPreparing {
                 ProgressView()
-                    .frame(width: 32, height: 32)
+                    .frame(width: buttonSize, height: buttonSize)
             } else {
                 Button(action: {
                     HapticManager.impact(.light)
                     player.togglePlayPause()
                 }) {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: isIOS26 ? 16 : 15, weight: .semibold))
-                        .frame(width: 32, height: 32)
+                        .font(.system(size: isTablet ? 24 : (isIOS26 ? 16 : 15), weight: .semibold))
+                        .frame(width: buttonSize, height: buttonSize)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(MiniPlayerButtonStyle())
