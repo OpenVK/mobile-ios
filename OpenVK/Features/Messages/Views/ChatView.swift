@@ -2099,7 +2099,7 @@ private struct MessageBubble: View {
         let attachments = message.richAttachments ?? []
         if attachments.contains(where: {
             switch $0 {
-            case .audio, .wall, .poll, .link, .sticker, .unsupported: return true
+            case .audio, .wall, .poll, .link, .sticker, .gift, .unsupported: return true
             case .photo, .video, .document: return false
             }
         }) { return true }
@@ -2727,6 +2727,33 @@ private struct ChatRichAttachmentCard: View {
                 Color.clear
             }
             .frame(width: 120, height: 120)
+        case .gift(let gift):
+            VStack(spacing: 8) {
+                Label("Подарок", systemImage: "gift.fill")
+                    .font(.subheadline.weight(.semibold))
+                if let previewURL = gift.previewURL {
+                    CachedRemoteImage(url: previewURL, contentMode: .fit) {
+                        Image(systemName: "gift.fill")
+                            .font(.system(size: 50))
+                    }
+                    .frame(width: min(mediaWidth - 24, 180), height: 160)
+                } else {
+                    Image(systemName: "gift.fill")
+                        .font(.system(size: 48))
+                        .frame(height: 110)
+                }
+                if let caption = gift.caption, !caption.isEmpty {
+                    Text("«\(caption)»")
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .foregroundStyle(isOutgoing ? Color.white : Color.primary)
+            .frame(maxWidth: .infinity)
+            .padding(10)
+            .background(Color(.tertiarySystemFill).opacity(0.25),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         case .unsupported(let type):
             Label("Вложение: \(type)", systemImage: "paperclip")
                 .font(.caption)

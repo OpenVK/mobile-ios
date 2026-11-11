@@ -121,6 +121,48 @@ struct VKConversationAttachment: Decodable {
     let wall: VKMessageWallAttachment?
     let poll: VKPollAttachment?
     let link: VKMessageLinkAttachment?
+    let gift: VKMessageGiftAttachment?
+}
+
+// Gift attachments may expose thumbnails at the top level or within "gift".
+struct VKMessageGiftAsset: Decodable {
+    let thumb48: String?
+    let thumb96: String?
+    let thumb256: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case thumb48 = "thumb_48"
+        case thumb96 = "thumb_96"
+        case thumb256 = "thumb_256"
+    }
+}
+
+struct VKMessageGiftAttachment: Decodable {
+    let gift: VKMessageGiftAsset?
+    let message: String?
+    let thumb48: String?
+    let thumb96: String?
+    let thumb256: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case gift, message
+        case thumb48 = "thumb_48"
+        case thumb96 = "thumb_96"
+        case thumb256 = "thumb_256"
+    }
+}
+
+struct ChatGift: Hashable, Codable {
+    let previewURL: URL?
+    let caption: String?
+
+    init(_ gift: VKMessageGiftAttachment?) {
+        let url = gift?.gift?.thumb256 ?? gift?.thumb256
+            ?? gift?.gift?.thumb96 ?? gift?.thumb96
+            ?? gift?.gift?.thumb48 ?? gift?.thumb48
+        previewURL = url.flatMap(URL.init(string:))
+        caption = gift?.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct VKMessageLinkAttachment: Decodable {
@@ -302,6 +344,7 @@ enum ChatRichAttachment: Hashable, Codable {
     case poll(ChatPoll)
     case link(ChatLink)
     case sticker(URL)
+    case gift(ChatGift)
     case unsupported(String)
 
     var photos: [ChatPhoto] {
@@ -329,6 +372,8 @@ enum ChatRichAttachment: Hashable, Codable {
         case "wall":
             guard let wall = attachment.wall, depth < 2 else { return nil }
             self = .wall(ChatWallPost(wall, depth: depth))
+        case "gift":
+            self = .gift(ChatGift(attachment.gift))
         case "poll":
             guard let poll = attachment.poll else { return nil }
             self = .poll(ChatPoll(poll))
@@ -996,6 +1041,29 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             return "\(actorName) закрепил(а) сообщение"
         case "chat_unpin_message":
             return "\(actorName) открепил(а) сообщение"
+        case "coins_transfer":
+            // member_id is the number of voices here, not another user's ID.
+            let amount = memberID.flatMap { $0 > 0 ? $0 : nil }
+            let quantity: String
+            if let amount {
+                let lastTwo = amount % 100
+                let last = amount % 10
+                let noun = (11...14).contains(lastTwo) ? "голосов"
+                    : last == 1 ? "голос"
+                    : (2...4).contains(last) ? "голоса" : "голосов"
+                quantity = "\(amount) \(noun)"
+            } else {
+                quantity = "голоса"
+            }
+            let headline = actorID == AuthService.shared.currentUser?.uid
+                ? "Вы отправили \(quantity)"
+                : "\(actorName) отправил(а) вам \(quantity)"
+            let note = action?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return note.isEmpty ? headline : "\(headline): «\(note)»"
+        case "rating_up":
+            let note = action?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return note.isEmpty ? "\(actorName) повысил(а) рейтинг"
+                : "\(actorName) повысил(а) рейтинг: «\(note)»"
         default:
             let text = action?.text?.trimmingCharacters(in: .whitespacesAndNewlines)
             return text?.isEmpty == false ? text : "Системное сообщение"
