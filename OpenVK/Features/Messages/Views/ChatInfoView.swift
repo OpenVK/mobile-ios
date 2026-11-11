@@ -455,29 +455,39 @@ struct ChatInfoView: View {
         }
     }
 
+    @ViewBuilder
     private func materialRowLabel(_ item: ChatMaterial, section: ChatMaterialSection) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: section == .audio ? "music.note" : section == .documents ? "doc" : "link")
-                .font(.system(size: 19))
-                .foregroundStyle(Color.appAccent)
-                .frame(width: 40, height: 40)
-                .background(Color.appAccent.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                if let subtitle = item.subtitle {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+        if section == .documents {
+            HStack {
+                DocumentRowContent(title: item.title, ext: item.subtitle ?? "", detail: item.documentSizeText)
+                Spacer(minLength: 8)
             }
-            Spacer()
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        } else {
+            HStack(spacing: 12) {
+                Image(systemName: section == .audio ? "music.note" : "link")
+                    .font(.system(size: 19))
+                    .foregroundStyle(Color.appAccent)
+                    .frame(width: 40, height: 40)
+                    .background(Color.appAccent.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    if let subtitle = item.subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
     }
 
     private func memberCountWord(_ count: Int) -> String {

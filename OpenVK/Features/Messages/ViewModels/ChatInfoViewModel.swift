@@ -53,7 +53,15 @@ final class ChatInfoViewModel: ObservableObject {
     }
 
     var availableSections: [ChatMaterialSection] {
-        ChatMaterialSection.allCases.filter { conversation.isChat || $0 != .members }
+        ChatMaterialSection.allCases.filter { section in
+            if section == .members { return conversation.isChat }
+            // An API failure is not proof that this category is empty.
+            guard let state = materials[section], state.hasLoaded,
+                  state.items.isEmpty, state.nextFrom == nil, state.error == nil else {
+                return true
+            }
+            return false
+        }
     }
 
     var canAddMembers: Bool { canInvite }
@@ -65,10 +73,11 @@ final class ChatInfoViewModel: ObservableObject {
     func load() {
         guard !membersLoaded else { return }
         membersLoaded = true
-        if conversation.isChat {
-            refreshMembers()
-        } else {
-            loadMaterials(selectedSection)
+        if conversation.isChat { refreshMembers() }
+        // Fetch each category once so empty tabs disappear without requiring a tap.
+        // These results are retained and reused when opening the corresponding tab.
+        for section in ChatMaterialSection.allCases where section != .members {
+            loadMaterials(section)
         }
         Task {
             if let muted = try? await service.getMuted(peerID: conversation.id) {
@@ -334,6 +343,10 @@ final class ChatInfoViewModel: ObservableObject {
                 updated.hasLoaded = true
                 updated.isLoading = false
                 materials[section] = updated
+                if !availableSections.contains(selectedSection),
+                   let replacement = availableSections.first {
+                    selectedSection = replacement
+                }
             } catch {
                 var updated = materials[section] ?? MaterialState()
                 updated.isLoading = false

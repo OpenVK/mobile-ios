@@ -131,6 +131,12 @@ struct ChatMaterial: Identifiable {
     let linkURL: URL?
     let title: String
     let subtitle: String?
+    var documentSize: Int? = nil
+
+    var documentSizeText: String? {
+        guard let documentSize, documentSize > 0 else { return nil }
+        return ByteCountFormatter.string(fromByteCount: Int64(documentSize), countStyle: .file)
+    }
 }
 
 struct ChatMaterialsPage {
@@ -259,7 +265,7 @@ struct ChatInfoService: ChatInfoServiceProtocol {
                 } else { material = nil }
             case .documents:
                 if let document = attachment.doc {
-                    material = ChatMaterial(photoURL: nil, videoURL: nil, audioURL: nil, documentURL: document.url.flatMap { URL(string: $0) }, linkURL: nil, title: document.title ?? "Документ", subtitle: document.ext?.uppercased())
+                    material = ChatMaterial(photoURL: nil, videoURL: nil, audioURL: nil, documentURL: document.url.flatMap { URL(string: $0) }, linkURL: nil, title: document.title ?? "Документ", subtitle: document.ext?.uppercased(), documentSize: document.size)
                 } else { material = nil }
             case .links:
                 if let link = attachment.link, let url = link.url.flatMap({ URL(string: $0) }) {

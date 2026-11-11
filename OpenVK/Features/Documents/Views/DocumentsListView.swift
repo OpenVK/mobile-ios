@@ -208,39 +208,7 @@ private struct DocumentRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(doc.iconColor.opacity(0.12))
-                    .frame(width: 44, height: 44)
-
-                Image(systemName: doc.iconName)
-                    .font(.system(size: 20))
-                    .foregroundColor(doc.iconColor)
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(doc.title)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-
-                HStack(spacing: 6) {
-                    if !doc.ext.isEmpty {
-                        Text(doc.ext.uppercased())
-                            .font(.system(size: 10, weight: .bold))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(Color(.tertiarySystemBackground))
-                            .foregroundColor(.secondary)
-                            .cornerRadius(4)
-                    }
-
-                    Text(doc.formattedSize)
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-            }
-
+            DocumentRowContent(title: doc.title, ext: doc.ext, detail: doc.formattedSize)
             Spacer(minLength: 8)
 
             if isDownloading {
@@ -272,6 +240,54 @@ private struct DocumentRow: View {
         .contentShape(Rectangle())
         .onTapGesture {
             onViewDownload()
+        }
+    }
+}
+
+ 
+// Common document identity used in the library and conversation materials.
+// Action menus belong to the screen, not the reusable content.
+struct DocumentRowContent: View {
+    let title: String
+    let ext: String
+    let detail: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(DocumentTypeAppearance.iconColor(for: ext).opacity(0.12))
+                    .frame(width: 44, height: 44)
+
+                Image(systemName: DocumentTypeAppearance.iconName(for: ext))
+                    .font(.system(size: 20))
+                    .foregroundStyle(DocumentTypeAppearance.iconColor(for: ext))
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    if !ext.isEmpty {
+                        Text(ext.uppercased())
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color(.tertiarySystemBackground))
+                            .foregroundStyle(.secondary)
+                            .cornerRadius(4)
+                    }
+
+                    if let detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 }
