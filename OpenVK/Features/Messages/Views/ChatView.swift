@@ -3,6 +3,8 @@ import Lottie
 import Foundation
 import UIKit
 import PhotosUI
+import PencilKit
+import UniformTypeIdentifiers
 
 private struct PendingChatPhoto: Identifiable {
     let id = UUID()
@@ -70,7 +72,10 @@ struct ChatView: View {
     @State private var editingMessage: ChatMessage?
     @State private var messageToDelete: ChatMessage?
     @State private var showsPhotoPicker = false
+    @State private var showsAttachmentPicker = false
+    @State private var openDeviceMediaAfterDismissal = false
     @State private var selectedPhotos: [PendingChatPhoto] = []
+    @State private var selectedRemoteAttachments: [ChatAttachmentChoice] = []
     @State private var overlayHeights: [String: CGFloat] = [:]
     @FocusState private var isComposerFocused: Bool
     @Binding var selectedMedia: Attachment?
@@ -99,9 +104,40 @@ struct ChatView: View {
         .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
+        .sheet(isPresented: $showsAttachmentPicker, onDismiss: {
+            if openDeviceMediaAfterDismissal {
+                openDeviceMediaAfterDismissal = false
+                showsPhotoPicker = true
+            }
+        }) {
+            ChatAttachmentPickerSheet(
+                remainingSlots: max(0, 10 - selectedPhotos.count - selectedRemoteAttachments.count),
+                onDeviceMedia: {
+                    openDeviceMediaAfterDismissal = true
+                    showsAttachmentPicker = false
+                },
+                onSelect: { choices in
+                    for item in choices where !selectedRemoteAttachments.contains(where: { $0.id == item.id }) {
+                        if selectedPhotos.count + selectedRemoteAttachments.count >= 10 { break }
+                        selectedRemoteAttachments.append(item)
+                    }
+                    showsAttachmentPicker = false
+                },
+                onGraffiti: { graffiti in
+                    if selectedPhotos.count + selectedRemoteAttachments.count < 10 {
+                        selectedPhotos.append(graffiti)
+                    }
+                    showsAttachmentPicker = false
+                }
+            )
+        }
         .sheet(isPresented: $showsPhotoPicker) {
-            ChatPhotoPicker(isPresented: $showsPhotoPicker, selectionLimit: max(1, 10 - selectedPhotos.count)) { photos in
-                selectedPhotos.append(contentsOf: photos.prefix(max(0, 10 - selectedPhotos.count)))
+            ChatPhotoPicker(isPresented: $showsPhotoPicker,
+                            selectionLimit: max(1, 10 - selectedPhotos.count - selectedRemoteAttachments.count),
+                            onUnsupportedVideo: {
+                                viewModel.errorMessage = "Сервер OpenVK пока не предоставляет API загрузки видео. Можно выбрать фотографии или прикрепить видео, уже загруженное в OVK."
+                            }) { photos in
+                selectedPhotos.append(contentsOf: photos.prefix(max(0, 10 - selectedPhotos.count - selectedRemoteAttachments.count)))
             }
         }
         .confirmationDialog("Удалить сообщение?", isPresented: Binding(
@@ -599,7 +635,7 @@ struct ChatView: View {
                     self.replyToMessage = nil
                 }
             }
-            if !selectedPhotos.isEmpty {
+            if !selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty {
                 selectedPhotoPreview
             }
             composerControls(maximumLines: maximumLines)
@@ -625,7 +661,7 @@ struct ChatView: View {
     @available(iOS 26.0, *)
     private func composerControls(maximumLines: Int) -> some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button { openPhotoPicker() } label: {
+            Button { openAttachmentPicker() } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .semibold))
                     .frame(width: composerControlHeight, height: composerControlHeight)
@@ -633,7 +669,7 @@ struct ChatView: View {
             .buttonStyle(.plain)
             .chatJumpButtonGlass()
             .accessibilityLabel("Добавить вложение")
-            .disabled(selectedPhotos.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
+            .disabled(selectedPhotos.count + selectedRemoteAttachments.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
 
             TextField("Сообщение", text: $text, axis: .vertical)
                 .font(.body)
@@ -696,7 +732,7 @@ struct ChatView: View {
     }
 
     private var hasSendableContent: Bool {
-        hasMessageText || (!selectedPhotos.isEmpty && editingMessage == nil)
+        hasMessageText || ((!selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty) && editingMessage == nil)
     }
 
     private var legacyMessageComposer: some View {
@@ -716,18 +752,18 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
-            if !selectedPhotos.isEmpty {
+            if !selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty {
                 selectedPhotoPreview
             }
             HStack(spacing: 4) {
-                Button(action: openPhotoPicker) {
+                Button(action: openAttachmentPicker) {
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 28))
                         .foregroundColor(.appAccent)
                 }
-                .disabled(selectedPhotos.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
+                .disabled(selectedPhotos.count + selectedRemoteAttachments.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
                 .padding(.leading, 5)
-                .accessibilityLabel("Добавить фотографии")
+                .accessibilityLabel("Добавить вложение")
 
                 legacyMessageInput
 
@@ -850,6 +886,40 @@ struct ChatView: View {
                         }
                 }
             }
+            ForEach(selectedRemoteAttachments) { item in
+                ZStack(alignment: .topTrailing) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.tertiarySystemBackground))
+                    VStack(spacing: 4) {
+                        if let url = item.thumbnailURL {
+                            CachedRemoteImage(url: url, contentMode: .fill) {
+                                Image(systemName: item.icon)
+                            }
+                            .frame(width: 64, height: 43)
+                            .clipped()
+                        } else {
+                            Image(systemName: item.icon)
+                                .font(.system(size: 24))
+                                .frame(height: 43)
+                        }
+                        Text(item.title)
+                            .font(.system(size: 9))
+                            .lineLimit(1)
+                            .padding(.horizontal, 2)
+                    }
+                    .frame(width: 64, height: 64)
+                    if !viewModel.isSendingPhotos {
+                        Button {
+                            selectedRemoteAttachments.removeAll { $0.id == item.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.white, .black.opacity(0.7))
+                        }
+                        .offset(x: 5, y: -5)
+                    }
+                }
+                .frame(width: 64, height: 64)
+            }
             .padding(.horizontal, 14)
             .padding(.top, 10)
             .padding(.bottom, 6)
@@ -857,11 +927,12 @@ struct ChatView: View {
         .frame(height: 82)
     }
 
-    private func openPhotoPicker() {
-        guard selectedPhotos.count < 10, !viewModel.isSendingPhotos else { return }
+    private func openAttachmentPicker() {
+        guard selectedPhotos.count + selectedRemoteAttachments.count < 10, !viewModel.isSendingPhotos,
+              editingMessage == nil else { return }
         dismissChatKeyboard()
         isEmojiPanelPresented = false
-        showsPhotoPicker = true
+        showsAttachmentPicker = true
     }
 
     private func sendComposedMessage() {
@@ -873,11 +944,14 @@ struct ChatView: View {
             self.editingMessage = nil
             text = ""
             legacyTextHeight = 36
-        } else if !selectedPhotos.isEmpty {
+        } else if !selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty {
             let photos = selectedPhotos.map(\.data)
-            viewModel.sendPhotos(text: value, photos: photos, replyTo: replyToMessage?.id) { success in
+            let identifiers = selectedRemoteAttachments.map(\.token)
+            viewModel.sendAttachments(text: value, photos: photos, attachments: identifiers,
+                                      replyTo: replyToMessage?.id) { success in
                 guard success else { return }
                 selectedPhotos.removeAll()
+                selectedRemoteAttachments.removeAll()
                 text = ""
                 replyToMessage = nil
                 legacyTextHeight = 36
@@ -3377,11 +3451,12 @@ private struct TopRoundedRectangle: Shape {
 private struct ChatPhotoPicker: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     let selectionLimit: Int
+    let onUnsupportedVideo: () -> Void
     let onSelect: ([PendingChatPhoto]) -> Void
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration()
-        configuration.filter = .images
+        configuration.filter = .any(of: [.images, .videos])
         configuration.selectionLimit = selectionLimit
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
@@ -3408,6 +3483,10 @@ private struct ChatPhotoPicker: UIViewControllerRepresentable {
             }
             let box = ResultsBox(count: results.count)
             let group = DispatchGroup()
+            let containsVideo = results.contains {
+                $0.itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) &&
+                !$0.itemProvider.canLoadObject(ofClass: UIImage.self)
+            }
 
             for (index, result) in results.enumerated() {
                 guard result.itemProvider.canLoadObject(ofClass: UIImage.self) else { continue }
@@ -3445,6 +3524,7 @@ private struct ChatPhotoPicker: UIViewControllerRepresentable {
 
             group.notify(queue: .main) {
                 self.parent.onSelect(box.photos.compactMap { $0 })
+                if containsVideo { self.parent.onUnsupportedVideo() }
             }
         }
     }
