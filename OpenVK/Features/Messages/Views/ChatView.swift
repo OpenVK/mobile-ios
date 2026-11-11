@@ -885,8 +885,7 @@ struct ChatView: View {
                             }
                         }
                 }
-            }
-            ForEach(selectedRemoteAttachments) { item in
+                ForEach(selectedRemoteAttachments) { item in
                 ZStack(alignment: .topTrailing) {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color(.tertiarySystemBackground))
@@ -919,6 +918,7 @@ struct ChatView: View {
                     }
                 }
                 .frame(width: 64, height: 64)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.top, 10)
@@ -3708,7 +3708,7 @@ private final class ChatAttachmentLibrary: ObservableObject {
                         let source = photo.sizes?.array.max(by: { ($0.width ?? 0) < ($1.width ?? 0) })
                         let url = (source?.url ?? source?.src).flatMap(URL.init(string:))
                         return ChatAttachmentChoice(
-                            token: .attachmentToken(type: "photo", ownerID: owner, id: id),
+                            token: ChatAttachmentChoice.attachmentToken(type: "photo", ownerID: owner, id: id),
                             title: "Фотография \(id)", detail: nil, thumbnailURL: url, icon: "photo"
                         )
                     }
@@ -3726,7 +3726,7 @@ private final class ChatAttachmentLibrary: ObservableObject {
                     (response.items ?? []).compactMap { video -> ChatAttachmentChoice? in
                         guard let id = video.id, let owner = video.ownerId else { return nil }
                         return ChatAttachmentChoice(
-                            token: .attachmentToken(type: "video", ownerID: owner, id: id),
+                            token: ChatAttachmentChoice.attachmentToken(type: "video", ownerID: owner, id: id),
                             title: video.title ?? "Видео", detail: nil,
                             thumbnailURL: (video.image?.last?.url ?? video.image?.first?.url).flatMap(URL.init(string:)),
                             icon: "play.rectangle"
@@ -3740,7 +3740,7 @@ private final class ChatAttachmentLibrary: ObservableObject {
                 let mapped = result.map { docs in
                     docs.map { doc in
                         ChatAttachmentChoice(
-                            token: .attachmentToken(type: "doc", ownerID: doc.ownerID, id: doc.id, accessKey: doc.accessKey),
+                            token: ChatAttachmentChoice.attachmentToken(type: "doc", ownerID: doc.ownerID, id: doc.id, accessKey: doc.accessKey),
                             title: doc.title, detail: doc.formattedSize, thumbnailURL: nil,
                             icon: DocumentTypeAppearance.iconName(for: doc.ext)
                         )
@@ -3754,7 +3754,7 @@ private final class ChatAttachmentLibrary: ObservableObject {
                     tracks.compactMap { track -> ChatAttachmentChoice? in
                         guard let id = track.vkID, let owner = track.ownerID else { return nil }
                         return ChatAttachmentChoice(
-                            token: .attachmentToken(type: "audio", ownerID: owner, id: id),
+                            token: ChatAttachmentChoice.attachmentToken(type: "audio", ownerID: owner, id: id),
                             title: track.title, detail: track.artist, thumbnailURL: track.artworkURL.flatMap(URL.init(string:)),
                             icon: "music.note"
                         )
@@ -3860,7 +3860,6 @@ private struct ChatAttachmentPickerSheet: View {
                             onDeviceMedia()
                         } else {
                             section = category
-                            selection = []
                             if category != .graffiti { library.load(category) }
                         }
                     } label: {
@@ -4040,7 +4039,9 @@ private struct ChatGraffitiCanvas: UIViewRepresentable {
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
-        if canvas.drawing != drawing { canvas.drawing = drawing }
+        if canvas.drawing.dataRepresentation() != drawing.dataRepresentation() {
+            canvas.drawing = drawing
+        }
         canvas.tool = PKInkingTool(.pen, color: ink, width: 5)
     }
 
@@ -4120,7 +4121,7 @@ private struct ChatAttachmentDocumentUploader {
                         throw ChatAttachmentDocumentUploadError.malformedResponse
                     }
                     let choice = ChatAttachmentChoice(
-                        token: .attachmentToken(type: "doc", ownerID: owner, id: id, accessKey: item.accessKey),
+                        token: ChatAttachmentChoice.attachmentToken(type: "doc", ownerID: owner, id: id, accessKey: item.accessKey),
                         title: item.title ?? name, detail: nil, thumbnailURL: nil,
                         icon: DocumentTypeAppearance.iconName(for: item.ext ?? "")
                     )
@@ -4130,6 +4131,9 @@ private struct ChatAttachmentDocumentUploader {
                         // Server method stubs return numeric 0; decoding fails.
                         let mapped: Error
                         if error is DecodingError {
+                            mapped = ChatAttachmentDocumentUploadError.unavailable
+                        } else if let apiError = error as? APIError,
+                                  case .decoding = apiError {
                             mapped = ChatAttachmentDocumentUploadError.unavailable
                         } else { mapped = error }
                         completion(.failure(mapped))
