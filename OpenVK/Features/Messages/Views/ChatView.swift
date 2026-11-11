@@ -1880,6 +1880,7 @@ private struct ChatMentionText: View {
     let isOutgoing: Bool
     let isDeleted: Bool
     let onMentionTap: (String) -> Void
+    var inlineMetadata: String? = nil
 
     var body: some View {
         Text(attributedText)
@@ -1896,6 +1897,17 @@ private struct ChatMentionText: View {
     }
 
     private var attributedText: AttributedString {
+        var value = mentionAttributedText
+        if let inlineMetadata {
+            var suffix = AttributedString("  " + inlineMetadata)
+            suffix.font = .system(size: 10)
+            suffix.foregroundColor = isOutgoing ? .white.opacity(0.75) : .secondary
+            value.append(suffix)
+        }
+        return value
+    }
+
+    private var mentionAttributedText: AttributedString {
         guard !isDeleted,
               let expression = try? NSRegularExpression(
                 pattern: "\\[([^\\]|]+)\\|([^\\]]+)\\]|@([A-Za-zА-Яа-яЁё0-9_]+)"
@@ -2498,28 +2510,33 @@ private struct MessageBubble: View {
     }
 
     private var photoMessageTextAndMetadata: some View {
-        messageText
-            .padding(.trailing, metadataSlotWidth)
-            .padding(.bottom, 14)
+        messageTextAndMetadata
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottomTrailing) {
-                messageMetadata.frame(width: metadataSlotWidth, alignment: .trailing)
-            }
     }
 
     private var messageTextAndMetadata: some View {
-        messageText
-            .frame(width: messageTextWidth, alignment: .leading)
-            .padding(.trailing, metadataSlotWidth)
-            .padding(.bottom, 14)
-            .overlay(alignment: .bottomTrailing) {
-                messageMetadata.frame(width: metadataSlotWidth, alignment: .trailing)
-            }
+        ChatMentionText(
+            text: message.isDeleted ? "Сообщение удалено" : message.text,
+            isOutgoing: message.isOutgoing,
+            isDeleted: message.isDeleted,
+            onMentionTap: onMentionTap,
+            inlineMetadata: inlineMetadataText
+        )
+        .frame(width: bubbleContentWidth > 0 ? bubbleContentWidth : nil, alignment: .leading)
     }
 
-    private var messageTextWidth: CGFloat? {
-        guard bubbleContentWidth > metadataSlotWidth else { return nil }
-        return bubbleContentWidth - metadataSlotWidth
+    private var inlineMetadataText: String {
+        let time = message.date.formatted(date: .omitted, time: .shortened)
+        let edit = message.isEdited ? "ред. " : ""
+        let receipt: String
+        switch message.deliveryStatus {
+        case .sending: receipt = " …"
+        case .unread: receipt = " ✓"
+        case .read: receipt = " ✓✓"
+        case .failed: receipt = " !"
+        case nil: receipt = ""
+        }
+        return edit + time + receipt
     }
 
     private var metadataSlotWidth: CGFloat { message.isEdited ? 76 : 50 }
