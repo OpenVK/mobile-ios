@@ -101,7 +101,7 @@ struct ChatView: View {
     // modifiers in separate expressions for the Swift 6 type checker.
     private var chatPresentation: some View {
         chatNavigation
-        .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
+        .alert("Ошибка", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
         .sheet(isPresented: $showsAttachmentPicker, onDismiss: {
@@ -886,7 +886,7 @@ struct ChatView: View {
                         }
                 }
                 ForEach(selectedRemoteAttachments) { item in
-                ZStack(alignment: .topTrailing) {
+                    ZStack(alignment: .topTrailing) {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color(.tertiarySystemBackground))
                     VStack(spacing: 4) {
@@ -917,7 +917,7 @@ struct ChatView: View {
                         .offset(x: 5, y: -5)
                     }
                 }
-                .frame(width: 64, height: 64)
+                    .frame(width: 64, height: 64)
                 }
             }
             .padding(.horizontal, 14)
