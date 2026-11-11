@@ -1899,10 +1899,12 @@ private struct ChatMentionText: View {
     private var attributedText: AttributedString {
         var value = mentionAttributedText
         if let inlineMetadata {
-            var suffix = AttributedString("  " + inlineMetadata)
-            suffix.font = .system(size: 10)
-            suffix.foregroundColor = isOutgoing ? .white.opacity(0.75) : .secondary
-            value.append(suffix)
+            // Reserve the last-line width for the timestamp and receipt.
+            // The visible metadata is overlaid at the bubble's trailing edge.
+            var spacer = AttributedString("  " + inlineMetadata)
+            spacer.font = .system(size: 10)
+            spacer.foregroundColor = .clear
+            value.append(spacer)
         }
         return value
     }
@@ -2268,7 +2270,7 @@ private struct MessageBubble: View {
             }
 
             if !message.text.isEmpty {
-                messageTextAndMetadata
+                messageTextWithMetadata(width: photoBubbleWidth - 26)
             } else {
                 HStack {
                     Spacer()
@@ -2514,39 +2516,55 @@ private struct MessageBubble: View {
     }
 
     private var photoMessageTextAndMetadata: some View {
-        messageTextAndMetadata
+        messageTextWithMetadata(width: photoBubbleWidth - 26)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var messageTextAndMetadata: some View {
+        messageTextWithMetadata(width: bubbleContentWidth)
+    }
+
+    private func messageTextWithMetadata(width: CGFloat) -> some View {
         ChatMentionText(
             text: message.isDeleted ? "Сообщение удалено" : message.text,
             isOutgoing: message.isOutgoing,
             isDeleted: message.isDeleted,
             onMentionTap: onMentionTap,
-            inlineMetadata: inlineMetadataText
+            inlineMetadata: metadataSpaceReservation
         )
-        .frame(width: bubbleContentWidth > 0 ? bubbleContentWidth : nil, alignment: .leading)
-    }
-
-    private var inlineMetadataText: String {
-        let time = message.date.formatted(date: .omitted, time: .shortened)
-        let edit = message.isEdited ? "ред. " : ""
-        let receipt: String
-        switch message.deliveryStatus {
-        case .sending: receipt = " …"
-        case .unread: receipt = " ✓"
-        case .read: receipt = " ✓✓"
-        case .failed: receipt = " !"
-        case nil: receipt = ""
+        .frame(width: max(1, width), alignment: .leading)
+        .overlay(alignment: .bottomTrailing) {
+            // The invisible text suffix keeps the last line clear of this
+            // overlay, while the visible metadata always hugs the right edge.
+            messageMetadata
+                .padding(.bottom, 1)
         }
-        return edit + time + receipt
     }
 
-    private var metadataSlotWidth: CGFloat { message.isEdited ? 76 : 50 }
+    private var displayTime: String {
+        message.date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private var metadataSpaceReservation: String {
+        // Figure spaces have a predictable width at the same font size used
+        // for the invisible suffix. Reserve the measured metadata width.
+        let font = UIFont.systemFont(ofSize: 10)
+        let figureWidth = max(1, ("\u{2007}" as NSString).size(withAttributes: [.font: font]).width)
+        let count = Int(ceil(metadataSlotWidth / figureWidth))
+        return String(repeating: "\u{2007}", count: max(1, count))
+    }
+
+    private var metadataSlotWidth: CGFloat {
+        let font = UIFont.systemFont(ofSize: 10)
+        let title = (message.isEdited ? "ред. " : "") + displayTime
+        let titleWidth = (title as NSString).size(withAttributes: [.font: font]).width
+        // A read receipt is 18 pt wide; the HStack has 4 pt spacing.
+        let statusWidth: CGFloat = message.deliveryStatus == nil ? 0 : 22
+        return ceil(titleWidth + statusWidth + 4)
+    }
 
     private var timeLabel: some View {
-        Text(message.date, style: .time)
+        Text(displayTime)
             .font(.system(size: 10))
             .foregroundStyle(message.isOutgoing ? .white.opacity(0.75) : .secondary)
     }
@@ -2568,7 +2586,7 @@ private struct MessageBubble: View {
 
     private var stickerMetadata: some View {
         HStack(spacing: 4) {
-            Text(message.date, style: .time)
+            Text(displayTime)
                 .font(.system(size: 10))
             if let status = message.deliveryStatus {
                 deliveryStatusLabel(status)
@@ -2582,7 +2600,7 @@ private struct MessageBubble: View {
 
     private var imageMetadata: some View {
         HStack(spacing: 4) {
-            Text(message.date, style: .time)
+            Text(displayTime)
                 .font(.system(size: 10))
             if let status = message.deliveryStatus {
                 deliveryStatusLabel(status)

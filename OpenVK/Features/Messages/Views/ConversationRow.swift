@@ -189,23 +189,40 @@ struct ConversationRow: View {
 
 struct MessageReadReceiptIcon: View {
     let isRead: Bool
-    @State private var displaysSecondCheckmark = false
 
     var body: some View {
-        ZStack {
-            Image(systemName: "checkmark")
-                .offset(x: displaysSecondCheckmark ? -2 : 0)
-            Image(systemName: "checkmark")
-                .opacity(displaysSecondCheckmark ? 1 : 0)
-                .offset(x: displaysSecondCheckmark ? 2 : 0)
+        // A single check and an overlapping double check share the first
+        // stroke. The read state adds just the second rising stroke.
+        MessageReadReceiptShape(isRead: isRead)
+            .stroke(style: StrokeStyle(lineWidth: 1.35, lineCap: .round, lineJoin: .round))
+            .frame(width: 18, height: 11)
+    }
+}
+
+private struct MessageReadReceiptShape: Shape {
+    let isRead: Bool
+
+    func path(in rect: CGRect) -> Path {
+        let scaleX = rect.width / 18
+        let scaleY = rect.height / 11
+        let horizontalShift: CGFloat = isRead ? 0 : 4
+
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + (x + horizontalShift) * scaleX,
+                    y: rect.minY + y * scaleY)
         }
-        .font(.system(size: 8, weight: .semibold))
-        .frame(width: 12, height: 8)
-        .onAppear { displaysSecondCheckmark = isRead }
-        .onChange(of: isRead) { isRead in
-            withAnimation(.easeOut(duration: 0.2)) {
-                displaysSecondCheckmark = isRead
-            }
+
+        var path = Path()
+        path.move(to: point(1.0, 5.0))
+        path.addLine(to: point(4.5, 8.5))
+        path.addLine(to: point(12.0, 1.0))
+
+        if isRead {
+            // Only the rising arm of the second check is needed: two complete
+            // checkmark glyphs side by side look disconnected.
+            path.move(to: point(8.1, 8.5))
+            path.addLine(to: point(16.0, 1.0))
         }
+        return path
     }
 }
