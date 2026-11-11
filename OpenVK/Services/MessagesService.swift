@@ -17,6 +17,7 @@ protocol MessagesServiceProtocol {
     func fetchHistory(peerID: Int, offset: Int, count: Int, startMessageID: Int?, reverse: Bool, completion: @escaping (Result<MessagesPage, Error>) -> Void)
     func sendMessage(peerID: Int, text: String, replyTo: Int?, completion: @escaping (Result<Int, Error>) -> Void)
     func sendPhotos(peerID: Int, text: String, replyTo: Int?, photos: [Data], completion: @escaping (Result<Int, Error>) -> Void)
+    func sendAttachments(peerID: Int, text: String, replyTo: Int?, photos: [Data], attachments: [String], completion: @escaping (Result<Int, Error>) -> Void)
     func sendSticker(peerID: Int, stickerID: Int, completion: @escaping (Result<Int, Error>) -> Void)
     func fetchStickerPacks(completion: @escaping (Result<[VKStickerPack], Error>) -> Void)
     func cachedStickerPacks() -> [VKStickerPack]?
@@ -172,43 +173,54 @@ final class MessagesService: MessagesServiceProtocol {
     }
 
     func sendPhotos(peerID: Int, text: String, replyTo: Int?, photos: [Data], completion: @escaping (Result<Int, Error>) -> Void) {
-        guard !photos.isEmpty else { completion(.failure(APIError.invalidResponse)); return }
+        sendAttachments(peerID: peerID, text: text, replyTo: replyTo, photos: photos,
+                        attachments: [], completion: completion)
+    }
+
+    func sendAttachments(peerID: Int, text: String, replyTo: Int?, photos: [Data], attachments: [String],
+                         completion: @escaping (Result<Int, Error>) -> Void) {
+        guard !photos.isEmpty || !attachments.isEmpty else {
+            completion(.failure(APIError.invalidResponse))
+            return
+        }
+
         Task {
             do {
-                let server = try await client.call(
-                    method: "photos.getMessagesUploadServer",
-                    parameters: ["peer_id": String(peerID)],
-                    httpMethod: "GET",
-                    as: VKUploadServerResponse.self
-                )
-                guard let uploadURL = server.uploadUrl else { throw APIError.invalidResponse }
+                var identifiers = attachments
+                if !photos.isEmpty {
+                    let server = try await client.call(
+                        method: "photos.getMessagesUploadServer",
+                        parameters: ["peer_id": String(peerID)],
+                        httpMethod: "GET",
+                        as: VKUploadServerResponse.self
+                    )
+                    guard let uploadURL = server.uploadUrl else { throw APIError.invalidResponse }
 
-                var attachments: [String] = []
-                for (index, photo) in photos.enumerated() {
-                    let uploadedData = try await client.upload(
-                        urlString: uploadURL,
-                        fileData: photo,
-                        fileName: "message_\(index).jpg",
-                        mimeType: "image/jpeg"
-                    )
-                    let uploaded = try JSONDecoder().decode(VKUploadResult.self, from: uploadedData)
-                    let saved = try await client.call(
-                        method: "photos.saveMessagesPhoto",
-                        parameters: ["photo": uploaded.photo, "hash": uploaded.hash, "server": uploaded.server],
-                        httpMethod: "POST",
-                        as: [VKSavePhotoItem].self
-                    )
-                    guard let item = saved.first else { throw APIError.invalidResponse }
-                    guard let accessKey = item.accessKey, !accessKey.isEmpty else {
-                        throw APIError.invalidResponse
+                    for (index, photo) in photos.enumerated() {
+                        let uploadedData = try await client.upload(
+                            urlString: uploadURL,
+                            fileData: photo,
+                            fileName: "message_\(index).jpg",
+                            mimeType: "image/jpeg"
+                        )
+                        let uploaded = try JSONDecoder().decode(VKUploadResult.self, from: uploadedData)
+                        let saved = try await client.call(
+                            method: "photos.saveMessagesPhoto",
+                            parameters: ["photo": uploaded.photo, "hash": uploaded.hash, "server": uploaded.server],
+                            httpMethod: "POST",
+                            as: [VKSavePhotoItem].self
+                        )
+                        guard let item = saved.first else { throw APIError.invalidResponse }
+                        let key = item.accessKey.flatMap { $0.isEmpty ? nil : $0 }
+                        let base = "photo\(item.ownerId)_\(item.id)"
+                        identifiers.append(base + (key.map { "_\($0)" } ?? ""))
                     }
-                    attachments.append("photo\(item.ownerId)_\(item.id)_\(accessKey)")
                 }
 
                 var parameters = [
                     "peer_id": String(peerID),
                     "message": text,
-                    "attachment": attachments.joined(separator: ","),
+                    "attachment": identifiers.joined(separator: ","),
                     "random_id": String(Int.random(in: 1...Int.max))
                 ]
                 if let replyTo { parameters["reply_to"] = String(replyTo) }

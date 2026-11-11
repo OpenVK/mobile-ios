@@ -252,9 +252,18 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendPhotos(text: String, photos: [Data], replyTo: Int?, completion: @escaping (Bool) -> Void) {
-        guard canSendMessages, !photos.isEmpty, !isSendingPhotos else { completion(false); return }
+        sendAttachments(text: text, photos: photos, attachments: [], replyTo: replyTo, completion: completion)
+    }
+
+    func sendAttachments(text: String, photos: [Data], attachments: [String], replyTo: Int?,
+                         completion: @escaping (Bool) -> Void) {
+        guard canSendMessages, (!photos.isEmpty || !attachments.isEmpty), !isSendingPhotos else {
+            completion(false)
+            return
+        }
         isSendingPhotos = true
-        service.sendPhotos(peerID: conversation.id, text: text, replyTo: replyTo, photos: photos) { [weak self] result in
+        service.sendAttachments(peerID: conversation.id, text: text, replyTo: replyTo,
+                                photos: photos, attachments: attachments) { [weak self] result in
             guard let self else { completion(false); return }
             self.isSendingPhotos = false
             switch result {
