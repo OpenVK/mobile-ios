@@ -2179,7 +2179,7 @@ private struct MessageBubble: View {
         .foregroundStyle(message.isOutgoing ? .white : .primary)
         .frame(width: photoBubbleWidth, alignment: .leading)
         .background(attachmentBubbleColor)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(attachmentBubbleShape)
         .task(id: wall.url) {
             fetchedPostViews = nil
             guard wall.viewCount == nil, let reference = wall.postReference else { return }
@@ -2307,7 +2307,6 @@ private struct MessageBubble: View {
         VStack(alignment: .leading, spacing: 3) {
             VStack(spacing: 0) {
                 ChatPhotoCollage(photos: message.photos, width: photoBubbleWidth, onTap: onPhotoTap)
-                    .clipShape(TopRoundedRectangle(radius: 18))
 
                 if !message.text.isEmpty {
                     photoMessageTextAndMetadata
@@ -2319,8 +2318,11 @@ private struct MessageBubble: View {
                 }
             }
             .frame(width: photoBubbleWidth, alignment: .leading)
+            // Use the same Telegram-like silhouette for photo/video content and
+            // its background. Two separate masks caused exposed accent wedges.
+            .background(attachmentBubbleColor)
             .compositingGroup()
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(attachmentBubbleShape)
             .overlay(alignment: .bottomTrailing) {
                 if message.text.isEmpty {
                     imageMetadata
@@ -2328,7 +2330,6 @@ private struct MessageBubble: View {
                 }
             }
         }
-        .background(attachmentBubbleColor, in: attachmentBubbleShape)
     }
 
     private func videoBubble(_ video: ChatVideo) -> some View {
@@ -2373,7 +2374,6 @@ private struct MessageBubble: View {
                     .frame(width: photoBubbleWidth, height: 190)
                 }
                 .buttonStyle(.plain)
-                .clipShape(TopRoundedRectangle(radius: 18))
 
                 if !message.text.isEmpty {
                     photoMessageTextAndMetadata
@@ -2385,8 +2385,11 @@ private struct MessageBubble: View {
                 }
             }
             .frame(width: photoBubbleWidth, alignment: .leading)
+            // Use the same Telegram-like silhouette for photo/video content and
+            // its background. Two separate masks caused exposed accent wedges.
+            .background(attachmentBubbleColor)
             .compositingGroup()
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(attachmentBubbleShape)
             .overlay(alignment: .bottomTrailing) {
                 if message.text.isEmpty {
                     imageMetadata
@@ -2394,7 +2397,6 @@ private struct MessageBubble: View {
                 }
             }
         }
-        .background(attachmentBubbleColor, in: attachmentBubbleShape)
         .accessibilityLabel("Видео: \(video.title)")
     }
 
@@ -3439,71 +3441,80 @@ private struct MessageBubbleShape: Shape {
     let isOutgoing: Bool
 
     func path(in rect: CGRect) -> Path {
-        let limit = min(rect.width, rect.height) / 2
-        let topLeft = min(topLeadingRadius, limit)
-        let topRight = min(topTrailingRadius, limit)
-        let bottomLeft = min(bottomLeadingRadius, limit)
-        let bottomRight = min(bottomTrailingRadius, limit)
+        guard rect.width > 0, rect.height > 0 else { return Path() }
 
-        // The tail extends slightly beyond the bubble body, into the row's
-        // horizontal margin. It is part of the same closed path so there is
-        // no seam between the bubble and its tail.
-        let tailWidth: CGFloat = min(6, rect.width * 0.15)
-        let tailInset: CGFloat = min(10, rect.width * 0.3)
-        let tailRise: CGFloat = min(13, rect.height * 0.4)
+        // Like Telegram's messageBubbleImage, reserve space for the tail
+        // *inside* the bubble frame. Extending outside rect was clipped by
+        // UIKit's message-row hosting view and produced a broken tip.
+        let tailWidth: CGFloat = hasTail ? min(6, rect.width * 0.15) : 0
+        let left = rect.minX + (hasTail && !isOutgoing ? tailWidth : 0)
+        let right = rect.maxX - (hasTail && isOutgoing ? tailWidth : 0)
+        let top = rect.minY
+        let bottom = rect.maxY
+        let maxRadius = min((right - left) / 2, rect.height / 2)
+        let tl = min(topLeadingRadius, maxRadius)
+        let tr = min(topTrailingRadius, maxRadius)
+        let bl = min(bottomLeadingRadius, maxRadius)
+        let br = min(bottomTrailingRadius, maxRadius)
 
         var path = Path()
-        path.move(to: CGPoint(x: rect.minX + topLeft, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - topRight, y: rect.minY))
+        path.move(to: CGPoint(x: left + tl, y: top))
+        path.addLine(to: CGPoint(x: right - tr, y: top))
         path.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.minY + topRight),
-            control: CGPoint(x: rect.maxX, y: rect.minY)
+            to: CGPoint(x: right, y: top + tr),
+            control: CGPoint(x: right, y: top)
         )
 
         if hasTail && isOutgoing {
-            let startY = max(rect.minY + topRight, rect.maxY - tailRise)
-            path.addLine(to: CGPoint(x: rect.maxX, y: startY))
+            // Telegram-style smoothly connected lower-right tail: the right
+            // wall grows into the tip, then curves back into the bottom edge.
+            let startY = max(top + tr, bottom - 15)
+            path.addLine(to: CGPoint(x: right, y: startY))
             path.addCurve(
-                to: CGPoint(x: rect.maxX + tailWidth, y: rect.maxY - 2),
-                control1: CGPoint(x: rect.maxX, y: rect.maxY - tailRise * 0.55),
-                control2: CGPoint(x: rect.maxX + tailWidth - 1, y: rect.maxY - 5)
+                to: CGPoint(x: right + tailWidth, y: bottom - 2),
+                control1: CGPoint(x: right, y: bottom - 7),
+                control2: CGPoint(x: right + tailWidth * 0.4, y: bottom - 1)
             )
-            path.addQuadCurve(
-                to: CGPoint(x: rect.maxX - tailInset, y: rect.maxY),
-                control: CGPoint(x: rect.maxX + tailWidth - 2, y: rect.maxY + 2)
+            path.addCurve(
+                to: CGPoint(x: right - min(11, (right - left) * 0.25), y: bottom),
+                control1: CGPoint(x: right + tailWidth - 2, y: bottom + 1),
+                control2: CGPoint(x: right - 2, y: bottom + 1)
             )
         } else {
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomRight))
+            path.addLine(to: CGPoint(x: right, y: bottom - br))
             path.addQuadCurve(
-                to: CGPoint(x: rect.maxX - bottomRight, y: rect.maxY),
-                control: CGPoint(x: rect.maxX, y: rect.maxY)
+                to: CGPoint(x: right - br, y: bottom),
+                control: CGPoint(x: right, y: bottom)
             )
         }
 
         if hasTail && !isOutgoing {
-            path.addLine(to: CGPoint(x: rect.minX + tailInset, y: rect.maxY))
-            path.addQuadCurve(
-                to: CGPoint(x: rect.minX - tailWidth, y: rect.maxY - 2),
-                control: CGPoint(x: rect.minX - tailWidth + 2, y: rect.maxY + 2)
-            )
-            let endY = max(rect.minY + topLeft, rect.maxY - tailRise)
+            // Mirrored incoming tail; the remaining bottom edge is straight.
+            let inset = min(11, (right - left) * 0.25)
+            path.addLine(to: CGPoint(x: left + inset, y: bottom))
             path.addCurve(
-                to: CGPoint(x: rect.minX, y: endY),
-                control1: CGPoint(x: rect.minX - tailWidth + 1, y: rect.maxY - 5),
-                control2: CGPoint(x: rect.minX, y: rect.maxY - tailRise * 0.55)
+                to: CGPoint(x: left - tailWidth, y: bottom - 2),
+                control1: CGPoint(x: left + 2, y: bottom + 1),
+                control2: CGPoint(x: left - tailWidth + 2, y: bottom + 1)
+            )
+            let endY = max(top + tl, bottom - 15)
+            path.addCurve(
+                to: CGPoint(x: left, y: endY),
+                control1: CGPoint(x: left - tailWidth * 0.4, y: bottom - 1),
+                control2: CGPoint(x: left, y: bottom - 7)
             )
         } else {
-            path.addLine(to: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY))
+            path.addLine(to: CGPoint(x: left + bl, y: bottom))
             path.addQuadCurve(
-                to: CGPoint(x: rect.minX, y: rect.maxY - bottomLeft),
-                control: CGPoint(x: rect.minX, y: rect.maxY)
+                to: CGPoint(x: left, y: bottom - bl),
+                control: CGPoint(x: left, y: bottom)
             )
         }
 
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeft))
+        path.addLine(to: CGPoint(x: left, y: top + tl))
         path.addQuadCurve(
-            to: CGPoint(x: rect.minX + topLeft, y: rect.minY),
-            control: CGPoint(x: rect.minX, y: rect.minY)
+            to: CGPoint(x: left + tl, y: top),
+            control: CGPoint(x: left, y: top)
         )
         path.closeSubpath()
         return path
