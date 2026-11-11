@@ -206,6 +206,15 @@ private struct ConnectionStatusButton: View {
 private struct BrandingPlate: View {
     let topInset: CGFloat
 
+    private let logoHeight: CGFloat = 12
+    private let verticalPadding: CGFloat = 5
+
+    private var topPadding: CGFloat {
+        guard topInset >= 59 else { return 6 }
+        let plateHeight = logoHeight + verticalPadding * 2
+        return max(0, topInset - 30 - plateHeight / 2)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
@@ -213,14 +222,14 @@ private struct BrandingPlate: View {
                     .renderingMode(.template)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(height: 12)
+                    .frame(height: logoHeight)
                     .foregroundColor(.white)
             }
             .padding(.horizontal, 15)
-            .padding(.vertical, 5)
+            .padding(.vertical, verticalPadding)
             .background(Color.black.opacity(0.88))
             .clipShape(Capsule())
-            .padding(.top, topInset >= 59 ? 14 : 6)
+            .padding(.top, topPadding)
 
             Spacer()
         }
