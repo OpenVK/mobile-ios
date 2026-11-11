@@ -2416,8 +2416,10 @@ private struct MessageBubble: View {
 
     private var attachmentBubbleShape: MessageBubbleShape {
         MessageBubbleShape(
-            topLeadingRadius: !message.isOutgoing && joinsPrevious ? 6 : 18,
-            topTrailingRadius: message.isOutgoing && joinsPrevious ? 6 : 18,
+            // iMessage-style grouping keeps both top corners rounded. Only
+            // the lower corner on the sender's side flattens between messages.
+            topLeadingRadius: 18,
+            topTrailingRadius: 18,
             bottomLeadingRadius: !message.isOutgoing && joinsNext ? 6 : 18,
             bottomTrailingRadius: message.isOutgoing && joinsNext ? 6 : 18,
             hasTail: !joinsNext,
@@ -3437,48 +3439,72 @@ private struct MessageBubbleShape: Shape {
     let isOutgoing: Bool
 
     func path(in rect: CGRect) -> Path {
-        let maximumRadius = min(rect.width, rect.height) / 2
-        let topLeading = min(topLeadingRadius, maximumRadius)
-        let topTrailing = min(topTrailingRadius, maximumRadius)
-        let bottomLeading = min(bottomLeadingRadius, maximumRadius)
-        let bottomTrailing = min(bottomTrailingRadius, maximumRadius)
-        var path = Path()
+        let limit = min(rect.width, rect.height) / 2
+        let topLeft = min(topLeadingRadius, limit)
+        let topRight = min(topTrailingRadius, limit)
+        let bottomLeft = min(bottomLeadingRadius, limit)
+        let bottomRight = min(bottomTrailingRadius, limit)
 
-        path.move(to: CGPoint(x: rect.minX + topLeading, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - topTrailing, y: rect.minY))
-        path.addArc(center: CGPoint(x: rect.maxX - topTrailing, y: rect.minY + topTrailing), radius: topTrailing, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomTrailing))
+        // The tail extends slightly beyond the bubble body, into the row's
+        // horizontal margin. It is part of the same closed path so there is
+        // no seam between the bubble and its tail.
+        let tailWidth: CGFloat = min(6, rect.width * 0.15)
+        let tailInset: CGFloat = min(10, rect.width * 0.3)
+        let tailRise: CGFloat = min(13, rect.height * 0.4)
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + topLeft, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - topRight, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY + topRight),
+            control: CGPoint(x: rect.maxX, y: rect.minY)
+        )
+
         if hasTail && isOutgoing {
+            let startY = max(rect.minY + topRight, rect.maxY - tailRise)
+            path.addLine(to: CGPoint(x: rect.maxX, y: startY))
             path.addCurve(
-                to: CGPoint(x: rect.maxX + 5, y: rect.maxY - 6),
-                control1: CGPoint(x: rect.maxX + 1, y: rect.maxY - 4),
-                control2: CGPoint(x: rect.maxX + 5, y: rect.maxY - 5)
+                to: CGPoint(x: rect.maxX + tailWidth, y: rect.maxY - 2),
+                control1: CGPoint(x: rect.maxX, y: rect.maxY - tailRise * 0.55),
+                control2: CGPoint(x: rect.maxX + tailWidth - 1, y: rect.maxY - 5)
             )
-            path.addCurve(
-                to: CGPoint(x: rect.maxX - 12, y: rect.maxY),
-                control1: CGPoint(x: rect.maxX + 2, y: rect.maxY - 3),
-                control2: CGPoint(x: rect.maxX - 6, y: rect.maxY + 1)
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX - tailInset, y: rect.maxY),
+                control: CGPoint(x: rect.maxX + tailWidth - 2, y: rect.maxY + 2)
             )
         } else {
-            path.addArc(center: CGPoint(x: rect.maxX - bottomTrailing, y: rect.maxY - bottomTrailing), radius: bottomTrailing, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomRight))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX - bottomRight, y: rect.maxY),
+                control: CGPoint(x: rect.maxX, y: rect.maxY)
+            )
         }
-        path.addLine(to: CGPoint(x: rect.minX + (hasTail && !isOutgoing ? 12 : bottomLeading), y: rect.maxY))
+
         if hasTail && !isOutgoing {
-            path.addCurve(
-                to: CGPoint(x: rect.minX - 5, y: rect.maxY - 6),
-                control1: CGPoint(x: rect.minX + 6, y: rect.maxY),
-                control2: CGPoint(x: rect.minX - 5, y: rect.maxY - 5)
+            path.addLine(to: CGPoint(x: rect.minX + tailInset, y: rect.maxY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX - tailWidth, y: rect.maxY - 2),
+                control: CGPoint(x: rect.minX - tailWidth + 2, y: rect.maxY + 2)
             )
+            let endY = max(rect.minY + topLeft, rect.maxY - tailRise)
             path.addCurve(
-                to: CGPoint(x: rect.minX, y: rect.maxY - 10),
-                control1: CGPoint(x: rect.minX - 4, y: rect.maxY - 3),
-                control2: CGPoint(x: rect.minX, y: rect.maxY - 3)
+                to: CGPoint(x: rect.minX, y: endY),
+                control1: CGPoint(x: rect.minX - tailWidth + 1, y: rect.maxY - 5),
+                control2: CGPoint(x: rect.minX, y: rect.maxY - tailRise * 0.55)
             )
         } else {
-            path.addArc(center: CGPoint(x: rect.minX + bottomLeading, y: rect.maxY - bottomLeading), radius: bottomLeading, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+            path.addLine(to: CGPoint(x: rect.minX + bottomLeft, y: rect.maxY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: rect.maxY - bottomLeft),
+                control: CGPoint(x: rect.minX, y: rect.maxY)
+            )
         }
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeading))
-        path.addArc(center: CGPoint(x: rect.minX + topLeading, y: rect.minY + topLeading), radius: topLeading, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeft))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + topLeft, y: rect.minY),
+            control: CGPoint(x: rect.minX, y: rect.minY)
+        )
         path.closeSubpath()
         return path
     }
