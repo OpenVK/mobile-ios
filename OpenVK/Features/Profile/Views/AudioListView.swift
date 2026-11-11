@@ -1761,8 +1761,12 @@ private struct ExpandedAudioPlayerView: View {
         return HStack(spacing: 0) {
             ExpandedAudioPlayerControlsView(track: track)
                 .frame(width: leftWidth, height: height)
-                .offset(x: selectedPage == 0 ? min(0, horizontalDragOffset) * 0.12 : 0)
-                .gesture(page0Gesture(width: width))
+                .offset(
+                    x: selectedPage == 0
+                        ? min(0, horizontalDragOffset) * 0.12
+                        : min(12, max(0, horizontalDragOffset) * 0.5)
+                )
+                .gesture(page0Gesture(width: width, allowsQueueDismiss: true))
 
             if selectedPage == 1 {
                 AudioPlaybackQueueView(
@@ -1777,8 +1781,11 @@ private struct ExpandedAudioPlayerView: View {
             }
         }
         .frame(width: width, height: height, alignment: .leading)
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .bottomLeading) {
+            // Keep shuffle, page controls and repeat within the left pane.
+            // Otherwise the repeat button covers the queue on landscape iPad.
             playerBottomBar
+                .frame(width: leftWidth)
         }
         .clipped()
         .background(Color(.systemBackground))
@@ -1827,7 +1834,7 @@ private struct ExpandedAudioPlayerView: View {
         }
     }
 
-    private func page0Gesture(width: CGFloat) -> some Gesture {
+    private func page0Gesture(width: CGFloat, allowsQueueDismiss: Bool = false) -> some Gesture {
         DragGesture(minimumDistance: 10, coordinateSpace: .global)
             .onChanged { value in
                 let dx = value.translation.width
@@ -1843,7 +1850,12 @@ private struct ExpandedAudioPlayerView: View {
 
                 switch dragAxis {
                 case .horizontal:
-                    if dx < 0 {
+                    if allowsQueueDismiss && selectedPage == 1 {
+                        // The controls remain visible beside the queue.
+                        // A rightward swipe from anywhere in this left pane
+                        // should close the queue just as a swipe on the right does.
+                        horizontalDragOffset = dx > 0 ? min(30, dx * 0.2) : 0
+                    } else if dx < 0 {
                         horizontalDragOffset = max(-width, dx)
                     } else {
                         horizontalDragOffset = min(30, dx * 0.2)
@@ -1870,7 +1882,19 @@ private struct ExpandedAudioPlayerView: View {
 
                 switch activeAxis {
                 case .horizontal:
-                    if dx < -45 || predictedX < -90 {
+                    if allowsQueueDismiss && selectedPage == 1 {
+                        if dx > 45 || predictedX > 90 {
+                            HapticManager.impact(.light)
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                selectedPage = 0
+                                horizontalDragOffset = 0
+                            }
+                        } else {
+                            withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                                horizontalDragOffset = 0
+                            }
+                        }
+                    } else if dx < -45 || predictedX < -90 {
                         HapticManager.impact(.light)
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                             selectedPage = 1
