@@ -1077,8 +1077,7 @@ final class AudioPlayerService: NSObject, ObservableObject {
             indices.append(contentsOf: 0..<index)
         }
 
-        let slice = indices.prefix(150)
-        return slice.map { AudioQueueEntry(queueIndex: $0, track: queue[$0]) }
+        return indices.map { AudioQueueEntry(queueIndex: $0, track: queue[$0]) }
     }
 
     private var player = AVPlayer()
