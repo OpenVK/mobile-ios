@@ -101,6 +101,9 @@ struct MessagesView: View {
                     Button("Удалить", role: .destructive) {
                         if let conversation = conversationToDelete {
                             viewModel.deleteConversation(conversation)
+                            if selectedConversation?.id == conversation.id {
+                                selectedConversation = nil
+                            }
                         }
                         conversationToDelete = nil
                     }
@@ -244,7 +247,7 @@ struct MessagesView: View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
                 content
-                    .frame(width: max(280, geometry.size.width * 0.30),
+                    .frame(width: geometry.size.width * 0.30,
                            height: geometry.size.height)
                 Divider()
 
@@ -329,6 +332,9 @@ struct MessagesView: View {
                     .contextMenu {
                         Button {
                             viewModel.archive(conversation, archived: true)
+                            if selectedConversation?.id == conversation.id {
+                                selectedConversation = nil
+                            }
                             showFirstArchiveTipIfNeeded()
                         } label: {
                             Label("В архив", systemImage: "archivebox")
