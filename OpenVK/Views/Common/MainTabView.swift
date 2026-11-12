@@ -149,64 +149,23 @@ struct MainTabView: View {
             }
     }
 
-    // Keep the destination at a fixed width. Moving a sibling HStack panel
-    // used to relayout the active chat and caused frame drops on each toggle.
+    // The drawer owns its drag state, so a finger movement never forces
+    // the active chat, media gallery or profile to re-evaluate its body.
     private var tabletNavigation: some View {
         GeometryReader { geometry in
             let sidebarWidth = min(290, max(240, geometry.size.width * 0.26))
 
             ZStack(alignment: .leading) {
                 tabletContent
-                    .id(tabletDestination)
                     .frame(width: geometry.size.width, height: geometry.size.height)
 
-                Color.black
-                    .opacity(tabletSidebarVisible ? 0.25 : 0)
-                    .allowsHitTesting(tabletSidebarVisible)
-                    .onTapGesture { tabletSidebarVisible = false }
-                    .zIndex(1)
-                    .animation(.easeOut(duration: 0.22), value: tabletSidebarVisible)
-
-                tabletSidebar
-                    .frame(width: sidebarWidth, height: geometry.size.height)
-                    .offset(x: tabletSidebarVisible ? 0 : -sidebarWidth - 4)
-                    .shadow(color: .black.opacity(tabletSidebarVisible ? 0.18 : 0),
-                            radius: 12, x: 4)
-                    .allowsHitTesting(tabletSidebarVisible)
-                    .zIndex(2)
-                    .animation(.easeOut(duration: 0.24), value: tabletSidebarVisible)
-
-                // The menu handle sits at the middle of the left edge rather
-                // than covering navigation-bar Back buttons on detail pages.
-                if !tabletSidebarVisible {
-                    Button { tabletSidebarVisible = true } label: {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(Color.appAccent)
-                            .frame(width: 25, height: 64)
-                            .background(.regularMaterial, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Показать боковое меню")
-                    .zIndex(3)
+                TabletSidebarDrawer(isVisible: $tabletSidebarVisible, sidebarWidth: sidebarWidth) {
+                    tabletSidebar
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .background(Color(.systemBackground))
             .clipped()
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 24, coordinateSpace: .local)
-                    .onEnded { value in
-                        let horizontal = value.translation.width
-                        let vertical = value.translation.height
-                        guard abs(horizontal) > abs(vertical) * 1.4 else { return }
-                        if tabletSidebarVisible {
-                            if horizontal < -65 { tabletSidebarVisible = false }
-                        } else if value.startLocation.x <= 30, horizontal > 65 {
-                            tabletSidebarVisible = true
-                        }
-                    }
-            )
             .onAppear { bottomInset = geometry.safeAreaInsets.bottom }
             .onChange(of: geometry.safeAreaInsets.bottom) { bottomInset = $0 }
         }
@@ -383,6 +342,115 @@ struct MainTabView: View {
             AudioPlayerService.shared.pause()
         default:
             break
+        }
+    }
+}
+
+
+private struct TabletSidebarDrawer<Sidebar: View>: View {
+    @Binding var isVisible: Bool
+    let sidebarWidth: CGFloat
+    let sidebar: Sidebar
+
+    @GestureState private var dragTranslation: CGFloat = 0
+
+    init(isVisible: Binding<Bool>, sidebarWidth: CGFloat,
+         @ViewBuilder sidebar: () -> Sidebar) {
+        _isVisible = isVisible
+        self.sidebarWidth = sidebarWidth
+        self.sidebar = sidebar()
+    }
+
+    private var progress: CGFloat {
+        let requested = (isVisible ? sidebarWidth : 0) + dragTranslation
+        return min(1, max(0, requested / max(1, sidebarWidth)))
+    }
+
+    private var interactiveSwipe: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .updating($dragTranslation) { value, state, transaction in
+                let dx = value.translation.width
+                guard abs(dx) > abs(value.translation.height) * 1.25 else { return }
+                if isVisible {
+                    state = min(0, dx)
+                } else if value.startLocation.x <= 32 {
+                    state = max(0, dx)
+                }
+                transaction.disablesAnimations = true
+            }
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > abs(dy) * 1.25 else { return }
+                let projected = value.predictedEndTranslation.width
+                if isVisible {
+                    if dx < -sidebarWidth * 0.32 || projected < -sidebarWidth * 0.55 {
+                        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.87)) {
+                            isVisible = false
+                        }
+                    }
+                } else if value.startLocation.x <= 32,
+                          dx > sidebarWidth * 0.32 || (value.startLocation.x <= 32 && projected > sidebarWidth * 0.55) {
+                    withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.87)) {
+                        isVisible = true
+                    }
+                }
+            }
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .topLeading) {
+                Color.black
+                    .opacity(0.24 * progress)
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(progress > 0.001)
+                    .onTapGesture {
+                        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.87)) {
+                            isVisible = false
+                        }
+                    }
+                    .simultaneousGesture(interactiveSwipe)
+
+                sidebar
+                    .frame(width: sidebarWidth, height: geometry.size.height)
+                    .offset(x: (progress - 1) * sidebarWidth)
+                    .shadow(color: .black.opacity(0.2 * progress), radius: 12, x: 4)
+                    .allowsHitTesting(progress > 0.01)
+                    .simultaneousGesture(interactiveSwipe)
+                    .zIndex(1)
+
+                if !isVisible {
+                    // The narrow hit region captures edge swipes without
+                    // intercepting scrolling or tapping in the main content.
+                    Color.clear
+                        .frame(width: 26, height: geometry.size.height)
+                        .contentShape(Rectangle())
+                        .gesture(interactiveSwipe)
+                        .zIndex(2)
+
+                    Button {
+                        withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.87)) {
+                            isVisible = true
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(Color.appAccent)
+                            .frame(width: 44, height: 44)
+                            .background(.regularMaterial, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Показать боковое меню")
+                    // Below the navigation bar: never obscures a Back button.
+                    .padding(.top, 56)
+                    .padding(.leading, 12)
+                    .zIndex(3)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.87),
+                       value: isVisible)
         }
     }
 }
