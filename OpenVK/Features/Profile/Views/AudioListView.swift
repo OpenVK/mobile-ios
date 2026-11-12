@@ -1475,6 +1475,7 @@ private struct AudioPlayerSheet: View {
                     miniPlayerCard
                         .opacity(miniOpacity)
                         .simultaneousGesture(horizontalSwipeGesture)
+                        .simultaneousGesture(dismissMiniPlayerGesture)
                 }
             }
             .frame(height: miniPlayerHeight)
@@ -1501,6 +1502,22 @@ private struct AudioPlayerSheet: View {
                 .opacity(expandedOpacity)
                 .allowsHitTesting(player.isExpanded)
         )
+    }
+
+    // A downward swipe on the collapsed bar dismisses the entire session.
+    // AudioPlayerService.stop() cancels active playback and also clears a
+    // paused track, queue, progress, Now Playing and remote controls.
+    private var dismissMiniPlayerGesture: some Gesture {
+        DragGesture(minimumDistance: 20, coordinateSpace: .local)
+            .onEnded { value in
+                guard progress < 0.1 else { return }
+                let vertical = value.translation.height
+                let horizontal = value.translation.width
+                guard vertical > 75,
+                      vertical > abs(horizontal) * 1.3 else { return }
+                HapticManager.impact(.light)
+                player.stop()
+            }
     }
 
     private var horizontalSwipeGesture: some Gesture {

@@ -12,7 +12,7 @@ struct MainTabView: View {
     @EnvironmentObject var auth: AuthService
     @State private var selectedTab: AppTab = .feed
     @State private var tabletDestination: TabletSidebarDestination = .feed
-    @State private var tabletSidebarVisible = true
+    @State private var tabletSidebarVisible = false
     @State private var showNewPost = false
     @State private var topInset: CGFloat = 0
     @State private var bottomInset: CGFloat = 0
@@ -149,41 +149,65 @@ struct MainTabView: View {
             }
     }
 
+    // Keep the destination at a fixed width. Moving a sibling HStack panel
+    // used to relayout the active chat and caused frame drops on each toggle.
     private var tabletNavigation: some View {
         GeometryReader { geometry in
-            HStack(spacing: 0) {
-                if tabletSidebarVisible {
-                    tabletSidebar
-                        .frame(width: min(270, max(230, geometry.size.width * 0.23)))
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    Divider()
-                }
+            let sidebarWidth = min(290, max(240, geometry.size.width * 0.26))
 
+            ZStack(alignment: .leading) {
                 tabletContent
                     .id(tabletDestination)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(alignment: .topLeading) {
-                        if !tabletSidebarVisible {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.26)) {
-                                    tabletSidebarVisible = true
-                                }
-                            } label: {
-                                Image(systemName: "sidebar.left")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(Color.appAccent)
-                                    .frame(width: 42, height: 42)
-                                    .background(.regularMaterial, in: Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.leading, 12)
-                            .padding(.top, 8)
-                            .accessibilityLabel("Показать боковое меню")
-                        }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+
+                Color.black
+                    .opacity(tabletSidebarVisible ? 0.25 : 0)
+                    .allowsHitTesting(tabletSidebarVisible)
+                    .onTapGesture { tabletSidebarVisible = false }
+                    .zIndex(1)
+                    .animation(.easeOut(duration: 0.22), value: tabletSidebarVisible)
+
+                tabletSidebar
+                    .frame(width: sidebarWidth, height: geometry.size.height)
+                    .offset(x: tabletSidebarVisible ? 0 : -sidebarWidth - 4)
+                    .shadow(color: .black.opacity(tabletSidebarVisible ? 0.18 : 0),
+                            radius: 12, x: 4)
+                    .allowsHitTesting(tabletSidebarVisible)
+                    .zIndex(2)
+                    .animation(.easeOut(duration: 0.24), value: tabletSidebarVisible)
+
+                // The menu handle sits at the middle of the left edge rather
+                // than covering navigation-bar Back buttons on detail pages.
+                if !tabletSidebarVisible {
+                    Button { tabletSidebarVisible = true } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Color.appAccent)
+                            .frame(width: 25, height: 64)
+                            .background(.regularMaterial, in: Capsule())
                     }
+                    .buttonStyle(.plain)
+                    .frame(maxHeight: .infinity, alignment: .center)
+                    .accessibilityLabel("Показать боковое меню")
+                    .zIndex(3)
+                }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .background(Color(.systemBackground))
+            .clipped()
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 24, coordinateSpace: .local)
+                    .onEnded { value in
+                        let horizontal = value.translation.width
+                        let vertical = value.translation.height
+                        guard abs(horizontal) > abs(vertical) * 1.4 else { return }
+                        if tabletSidebarVisible {
+                            if horizontal < -65 { tabletSidebarVisible = false }
+                        } else if value.startLocation.x <= 30, horizontal > 65 {
+                            tabletSidebarVisible = true
+                        }
+                    }
+            )
             .onAppear { bottomInset = geometry.safeAreaInsets.bottom }
             .onChange(of: geometry.safeAreaInsets.bottom) { bottomInset = $0 }
         }
@@ -208,9 +232,7 @@ struct MainTabView: View {
                     .font(.title3.weight(.semibold))
                 Spacer()
                 Button {
-                    withAnimation(.easeInOut(duration: 0.26)) {
-                        tabletSidebarVisible = false
-                    }
+                    tabletSidebarVisible = false
                 } label: {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 18))
@@ -222,7 +244,10 @@ struct MainTabView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
-                    Button { tabletDestination = .profile } label: {
+                    Button {
+                        tabletDestination = .profile
+                        tabletSidebarVisible = false
+                    } label: {
                         HStack(spacing: 12) {
                             Avatar(user: auth.currentUser ?? .current, size: 42)
                             VStack(alignment: .leading, spacing: 3) {
@@ -247,6 +272,7 @@ struct MainTabView: View {
                     ForEach(TabletSidebarDestination.menuItems) { item in
                         Button {
                             tabletDestination = item
+                            tabletSidebarVisible = false
                         } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: item.icon)

@@ -120,8 +120,8 @@ struct MoreView: View {
                     }
                     .foregroundColor(.primary)
 
-                    Button(action: { activeAlert = .unavailable }) {
-                        Label("Магазин стикеров", systemImage: "storefront")
+                    NavigationLink(destination: StickerStoreView()) {
+                        Label("Стикеры", systemImage: "face.smiling")
                             .labelStyle(SettingsLabelStyle(iconColor: .appAccent))
                     }
                     .foregroundColor(.primary)

@@ -27,22 +27,17 @@ struct ProfileView: View {
         GeometryReader { geometry in
             ScrollView {
                 if UIDevice.current.userInterfaceIdiom == .pad {
-                    tabletProfileContent(availableWidth: geometry.size.width)
-                } else {
-                    LazyVStack(spacing: 0) {
-                        ProfileHeaderView(
-                            user: viewModel.user,
-                            avatarRefreshToken: viewModel.avatarRefreshToken
-                        )
-                        switch viewModel.user.accessStatus {
-                        case .deleted, .banned, .blacklistedByThem, .blacklistedByMe, .privateProfile:
-                            SectionSpacer()
-                            ProfileStatusBanner(status: viewModel.user.accessStatus, user: viewModel.user)
-                        case .active:
-                            SectionSpacer()
-                            profileContent
-                        }
+                    if geometry.size.width > geometry.size.height {
+                        tabletProfileContent(availableWidth: geometry.size.width)
+                    } else {
+                        // Portrait iPad keeps the iPhone's vertical layout but
+                        // caps gallery tiles and wall media to readable sizes.
+                        compactProfileContent
+                            .frame(maxWidth: 600)
+                            .frame(maxWidth: .infinity)
                     }
+                } else {
+                    compactProfileContent
                 }
             }
         }
@@ -95,6 +90,23 @@ struct ProfileView: View {
             }
             .hidden()
         )
+    }
+
+    private var compactProfileContent: some View {
+        LazyVStack(spacing: 0) {
+            ProfileHeaderView(
+                user: viewModel.user,
+                avatarRefreshToken: viewModel.avatarRefreshToken
+            )
+            switch viewModel.user.accessStatus {
+            case .deleted, .banned, .blacklistedByThem, .blacklistedByMe, .privateProfile:
+                SectionSpacer()
+                ProfileStatusBanner(status: viewModel.user.accessStatus, user: viewModel.user)
+            case .active:
+                SectionSpacer()
+                profileContent
+            }
+        }
     }
 
     @ViewBuilder
