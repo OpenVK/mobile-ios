@@ -12,7 +12,7 @@ struct Conversation: Identifiable, Hashable, Codable {
     let lastMessageAuthorName: String?
     let lastMessageOutgoing: Bool
     let updatedAt: Date
-    let unreadCount: Int
+    var unreadCount: Int
     let lastMessageId: Int
     let lastMessageReadState: Int?
 
