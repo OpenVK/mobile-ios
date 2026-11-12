@@ -28,36 +28,43 @@ struct MessagesView: View {
     }
 
     var body: some View {
-        MessagesNavigationContainer {
-            archiveNavigableContent
-                .navigationTitle(toolbarTitle)
-                .navigationBarHidden(UIDevice.current.userInterfaceIdiom == .pad && splitChats)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        if viewModel.hasArchivedConversations {
-                            Button { showsArchive = true } label: {
-                                Image(systemName: "archivebox")
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .pad && splitChats {
+                // Do not embed the 30:70 layout in the outer navigation stack.
+                // It otherwise adds a second title/search toolbar across both
+                // columns and pushes the conversation far below its own header.
+                tabletSplitContent
+            } else {
+                MessagesNavigationContainer {
+                    archiveNavigableContent
+                        .navigationTitle(toolbarTitle)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                if viewModel.hasArchivedConversations {
+                                    Button { showsArchive = true } label: {
+                                        Image(systemName: "archivebox")
+                                    }
+                                    .accessibilityLabel("Архив чатов")
+                                }
                             }
-                            .accessibilityLabel("Архив чатов")
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button { showCreateChat = true } label: {
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 16, weight: .semibold))
+                                }
+                                .accessibilityLabel("Написать сообщение")
+                            }
                         }
-                    }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button {
-                            showCreateChat = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 16, weight: .semibold))
-                        }
-                        .accessibilityLabel("Написать сообщение")
-                    }
+                        .searchable(
+                            text: Binding(
+                                get: { viewModel.searchQuery },
+                                set: { viewModel.updateSearch(query: $0) }
+                            ),
+                            prompt: "Поиск чатов"
+                        )
                 }
-                .searchable(
-                    text: Binding(
-                        get: { viewModel.searchQuery },
-                        set: { viewModel.updateSearch(query: $0) }
-                    ),
-                    prompt: "Поиск чатов"
-                )
+            }
+        }
                 .sheet(isPresented: $showCreateChat) {
                     CreateChatView()
                 }
@@ -117,7 +124,6 @@ struct MessagesView: View {
                 } message: {
                     Text("Чат будет удалён из списка сообщений.")
                 }
-        }
         .onAppear {
             if viewModel.conversations.isEmpty {
                 viewModel.load()

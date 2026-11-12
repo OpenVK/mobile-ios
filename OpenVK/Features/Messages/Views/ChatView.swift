@@ -2040,11 +2040,13 @@ private struct MessageBubble: View {
             if let systemEventText = message.systemEventText {
                 SystemMessagePlaque(text: systemEventText, date: message.date)
             } else {
-                HStack(alignment: .bottom, spacing: 6) {
-                    if message.isOutgoing { Spacer(minLength: 48) }
+                HStack(alignment: .bottom, spacing: 0) {
+                    if message.isOutgoing { Spacer(minLength: 0) }
                     if !message.isOutgoing && isChat {
-                        // The table positions one avatar per visible sender group.
-                        Color.clear.frame(width: 38, height: 38)
+                        // Fixed avatar gutter on every incoming chat row:
+                        // 38 pt avatar + 6 pt gap, whether its image is shown
+                        // here or floated over the sender's message group.
+                        Color.clear.frame(width: 44, height: 38)
                     }
                     messageContent
                     .contextMenu {
@@ -2102,8 +2104,10 @@ private struct MessageBubble: View {
                         }
                         }
                     }
-                    if !message.isOutgoing { Spacer(minLength: 48) }
+                    if !message.isOutgoing { Spacer(minLength: 0) }
                 }
+                .frame(maxWidth: .infinity,
+                       alignment: message.isOutgoing ? .trailing : .leading)
             }
         }
         // Rich post cards must be separated from preceding messages even
@@ -3534,11 +3538,12 @@ private struct MessageBubbleShape: Shape {
         guard rect.width > 0, rect.height > 0 else { return Path() }
 
         // Like Telegram's messageBubbleImage, reserve space for the tail
-        // *inside* the bubble frame. Extending outside rect was clipped by
-        // UIKit's message-row hosting view and produced a broken tip.
-        let tailWidth: CGFloat = hasTail ? min(6, rect.width * 0.15) : 0
-        let left = rect.minX + (hasTail && !isOutgoing ? tailWidth : 0)
-        let right = rect.maxX - (hasTail && isOutgoing ? tailWidth : 0)
+        // *inside* the bubble frame. Reserve exactly the same gutter for
+        // grouped and ungrouped messages; only the last message draws a tail.
+        // This keeps every incoming left wall and outgoing right wall aligned.
+        let tailWidth: CGFloat = min(6, rect.width * 0.15)
+        let left = rect.minX + (!isOutgoing ? tailWidth : 0)
+        let right = rect.maxX - (isOutgoing ? tailWidth : 0)
         let top = rect.minY
         let bottom = rect.maxY
         let maxRadius = min((right - left) / 2, rect.height / 2)
