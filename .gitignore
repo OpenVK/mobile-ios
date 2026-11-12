@@ -1,4 +1,5 @@
 .DS_Store
+build
 
 # Xcode user-specific data (breakpoints, schemes, UI state)
 xcuserdata/

@@ -30,6 +30,7 @@ struct PostCard: View {
     @Binding var owningPost: Post?
     
     @State private var lastComment: Comment? = nil
+    @State private var selectedComment: Comment?
     @State private var isLoadingComment = false
 
     private var currentUID: Int {
@@ -211,7 +212,7 @@ struct PostCard: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        Text(lastComment.text)
+                        Text(lastComment.previewText)
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
                             .lineLimit(2)
@@ -223,6 +224,8 @@ struct PostCard: View {
                 .cornerRadius(8)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
+                .contentShape(Rectangle())
+                .onTapGesture { selectedComment = lastComment }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -245,6 +248,24 @@ struct PostCard: View {
     @ViewBuilder
     private var navigationLinks: some View {
         Group {
+            NavigationLink(
+                destination: Group {
+                    if let comment = selectedComment {
+                        PostDetailView(
+                            post: post,
+                            selectedMedia: $selectedMedia,
+                            owningPost: $owningPost,
+                            targetCommentID: comment.id
+                        )
+                    }
+                },
+                isActive: Binding(
+                    get: { selectedComment != nil },
+                    set: { if !$0 { selectedComment = nil } }
+                )
+            ) { EmptyView() }
+            .hidden()
+
             NavigationLink(
                 destination: Group {
                     if let user = selectedProfileUser {

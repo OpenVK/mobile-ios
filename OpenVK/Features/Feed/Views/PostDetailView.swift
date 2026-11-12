@@ -15,17 +15,21 @@ struct PostDetailView: View {
     @Binding var owningPost: Post?
 
     private let post: Post
+    private let targetCommentID: Int?
+    @State private var didScrollToTarget = false
     private var currentUID: Int { AuthService.shared.currentUser?.uid ?? 0 }
 
-    init(post: Post, selectedMedia: Binding<Attachment?> = .constant(nil), owningPost: Binding<Post?> = .constant(nil)) {
+    init(post: Post, selectedMedia: Binding<Attachment?> = .constant(nil), owningPost: Binding<Post?> = .constant(nil), targetCommentID: Int? = nil) {
         self.post = post
+        self.targetCommentID = targetCommentID
         self._selectedMedia = selectedMedia
         self._owningPost = owningPost
-        _viewModel = StateObject(wrappedValue: CommentsViewModel(post: post))
+        _viewModel = StateObject(wrappedValue: CommentsViewModel(post: post, targetCommentID: targetCommentID))
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
                     PostCard(
@@ -74,6 +78,7 @@ struct PostDetailView: View {
                                 isOwnComment: comment.fromId == currentUID,
                                 canDelete: comment.fromId == currentUID || viewModel.post.ownerID == currentUID
                             )
+                                .id(comment.id)
                                 Divider()
                                     .padding(.leading, 70)
                             }
@@ -98,6 +103,15 @@ struct PostDetailView: View {
                         }
                     }
                 }
+            }
+            .onChange(of: viewModel.comments.map(\.id)) { ids in
+                guard !didScrollToTarget, let targetCommentID,
+                      ids.contains(targetCommentID) else { return }
+                DispatchQueue.main.async {
+                    proxy.scrollTo(targetCommentID, anchor: .center)
+                    didScrollToTarget = true
+                }
+            }
             }
 
             if viewModel.editingComment != nil {

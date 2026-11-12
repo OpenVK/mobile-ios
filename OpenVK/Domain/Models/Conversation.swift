@@ -722,6 +722,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     let isDeleted: Bool
     let isEdited: Bool
     let deliveryStatus: MessageDeliveryStatus?
+    var incomingReadState: Int? = nil
     let endsChatParticipation: Bool
 
     // Modern OpenVK IM metadata. These are mutable so local actions can update
@@ -802,6 +803,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isDeleted = message.deleted == 1
         isEdited = message.edited == true || message.editedAt != nil
         deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
+        incomingReadState = isOutgoing ? nil : message.readState
         conversationMessageID = message.conversationMessageId
         randomID = message.randomId
         peerID = message.peerId
@@ -832,6 +834,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isDeleted: Bool,
         isEdited: Bool = false,
         deliveryStatus: MessageDeliveryStatus?,
+        incomingReadState: Int? = nil,
         endsChatParticipation: Bool = false,
         conversationMessageID: Int? = nil,
         randomID: Int? = nil,
@@ -861,6 +864,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.isDeleted = isDeleted
         self.isEdited = isEdited
         self.deliveryStatus = deliveryStatus
+        self.incomingReadState = incomingReadState
         self.endsChatParticipation = endsChatParticipation
         self.conversationMessageID = conversationMessageID
         self.randomID = randomID
@@ -947,6 +951,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             isDeleted: isDeleted,
             isEdited: isEdited,
             deliveryStatus: status,
+            incomingReadState: incomingReadState,
             endsChatParticipation: endsChatParticipation,
             conversationMessageID: conversationMessageID,
             randomID: randomID,
@@ -965,6 +970,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
             systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus,
+            incomingReadState: incomingReadState,
             endsChatParticipation: endsChatParticipation, conversationMessageID: conversationMessageID,
             randomID: randomID, peerID: peerID, readBy: readBy, isImportant: isImportant, isPinned: isPinned
         )
@@ -978,6 +984,7 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
             systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus,
+            incomingReadState: incomingReadState,
             endsChatParticipation: endsChatParticipation, conversationMessageID: conversationMessageID,
             randomID: randomID, peerID: peerID, readBy: readBy, isImportant: isImportant, isPinned: isPinned
         )

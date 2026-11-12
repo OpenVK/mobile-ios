@@ -488,9 +488,10 @@ struct ChatView: View {
                     .padding(.vertical, 1)
                 )
             },
-            onVisible: { id, nearBottom in
-                viewModel.rememberPosition(messageID: id)
+            onVisible: { firstID, lastID, nearBottom in
+                viewModel.rememberPosition(messageID: firstID)
                 viewModel.updateIsNearBottom(nearBottom)
+                viewModel.markVisibleMessagesAsRead(through: lastID)
             },
             canLoadOlder: { viewModel.canLoadOlderPage },
             canLoadNewer: { viewModel.canLoadNewerPage },
@@ -1069,7 +1070,7 @@ private struct ChatTableHistory: UIViewRepresentable {
     let scrollRequest: ChatScrollRequest
     let scrollRequestID: Int
     let rowContent: (Int) -> AnyView
-    let onVisible: (Int, Bool) -> Void
+    let onVisible: (Int, Int, Bool) -> Void
     let canLoadOlder: () -> Bool
     let canLoadNewer: () -> Bool
     let onLoadOlder: (ChatMessage) -> Bool
@@ -1444,14 +1445,20 @@ private struct ChatTableHistory: UIViewRepresentable {
             DispatchQueue.main.async { [weak self, weak table] in
                 guard let self, let table else { return }
                 self.pendingVisibleReport = false
-                guard let first = table.indexPathsForVisibleRows?.map(\.row).min(),
-                      self.displayedMessages.indices.contains(first) else { return }
+                let viewport = table.bounds.inset(by: table.adjustedContentInset)
+                let visibleRows = (table.indexPathsForVisibleRows ?? []).filter {
+                    table.rectForRow(at: $0).intersects(viewport)
+                }.map(\.row)
+                guard let first = visibleRows.min(),
+                      let last = visibleRows.max(),
+                      self.displayedMessages.indices.contains(first),
+                      self.displayedMessages.indices.contains(last) else { return }
                 let bottom = max(
                     -table.adjustedContentInset.top,
                     table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom
                 )
                 let nearBottom = table.contentOffset.y >= bottom - 32
-                self.parent.onVisible(self.displayedMessages[first].id, nearBottom)
+                self.parent.onVisible(self.displayedMessages[first].id, self.displayedMessages[last].id, nearBottom)
             }
         }
 

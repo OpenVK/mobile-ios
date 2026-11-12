@@ -84,7 +84,8 @@ final class CommentsService: CommentsServiceProtocol {
                         date: date,
                         likesCount: item.likes?.count ?? 0,
                         isLiked: (item.likes?.userLikes ?? 0) == 1,
-                        attachments: parsedAttachments
+                        attachments: parsedAttachments,
+                        attachmentPreviewLabels: item.attachmentPreviewLabels
                     )
                 }
                 completion(.success((comments: comments, count: response.count)))
@@ -338,7 +339,8 @@ final class CommentsService: CommentsServiceProtocol {
                         date: date,
                         likesCount: item.likes?.count ?? 0,
                         isLiked: (item.likes?.userLikes ?? 0) == 1,
-                        attachments: parsedAttachments
+                        attachments: parsedAttachments,
+                        attachmentPreviewLabels: item.attachmentPreviewLabels
                     )
                 }
                 completion(.success((comments: comments, count: response.count)))
@@ -442,7 +444,8 @@ final class CommentsService: CommentsServiceProtocol {
                         date: date,
                         likesCount: item.likes?.count ?? 0,
                         isLiked: item.likes?.userLikes == 1,
-                        attachments: parsedAttachments
+                        attachments: parsedAttachments,
+                        attachmentPreviewLabels: item.attachmentPreviewLabels
                     )
                     completion(.success(comment))
                 } else {

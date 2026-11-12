@@ -22,6 +22,7 @@ final class CommentsViewModel: ObservableObject {
     private let pageSize = 20
     private var currentOffset = 0
     private(set) var hasMore = true
+    private let targetCommentID: Int?
 
     var canSend: Bool {
         !newCommentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -37,9 +38,10 @@ final class CommentsViewModel: ObservableObject {
         return "Написать комментарий"
     }
 
-    init(post: Post, service: CommentsServiceProtocol = CommentsService.shared) {
+    init(post: Post, service: CommentsServiceProtocol = CommentsService.shared, targetCommentID: Int? = nil) {
         self.post = post
         self.service = service
+        self.targetCommentID = targetCommentID
     }
 
     func load() {
@@ -57,6 +59,7 @@ final class CommentsViewModel: ObservableObject {
                     self?.totalCount = response.count
                     self?.currentOffset = response.comments.count
                     self?.hasMore = response.comments.count < response.count
+                    self?.loadMoreUntilTargetIsFound()
                 case .failure(let error):
                     self?.error = error.localizedDescription
                 }
@@ -77,11 +80,19 @@ final class CommentsViewModel: ObservableObject {
                     self?.comments.append(contentsOf: response.comments)
                     self?.currentOffset += response.comments.count
                     self?.hasMore = (self?.currentOffset ?? 0) < response.count
+                    if response.comments.isEmpty { self?.hasMore = false }
+                    self?.loadMoreUntilTargetIsFound()
                 case .failure:
                     break
                 }
             }
         }
+    }
+
+    private func loadMoreUntilTargetIsFound() {
+        guard let targetCommentID = targetCommentID,
+              !comments.contains(where: { $0.id == targetCommentID }), hasMore else { return }
+        loadMore()
     }
 
     func sendComment() {

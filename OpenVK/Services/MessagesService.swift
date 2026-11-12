@@ -23,6 +23,7 @@ protocol MessagesServiceProtocol {
     func cachedStickerPacks() -> [VKStickerPack]?
     func setTyping(peerID: Int)
     func markAsRead(peerID: Int)
+    func markAsRead(peerID: Int, through messageID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func deleteConversation(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
     func leaveChat(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void)
@@ -37,6 +38,13 @@ protocol MessagesServiceProtocol {
 }
 
 extension MessagesServiceProtocol {
+    // Keep existing fake services compatible with the original protocol;
+    // the real service overrides this to use start_message_id.
+    func markAsRead(peerID: Int, through messageID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        markAsRead(peerID: peerID)
+        completion(.success(()))
+    }
+
     func fetchPinnedMessage(peerID: Int, completion: @escaping (Result<ChatMessage?, Error>) -> Void) {
         completion(.success(nil))
     }
@@ -289,6 +297,17 @@ final class MessagesService: MessagesServiceProtocol {
 
     func markAsRead(peerID: Int) {
         client.call(method: "messages.markAsRead", parameters: ["peer_id": String(peerID)], httpMethod: "POST", as: Int.self) { _ in }
+    }
+
+    func markAsRead(peerID: Int, through messageID: Int, completion: @escaping (Result<Void, Error>) -> Void) {
+        client.call(
+            method: "messages.markAsRead",
+            parameters: ["peer_id": String(peerID), "start_message_id": String(messageID)],
+            httpMethod: "POST",
+            as: Int.self
+        ) { result in
+            completion(result.map { _ in () }.mapError { $0 as Error })
+        }
     }
 
     func markConversationAsRead(peerID: Int, completion: @escaping (Result<Void, Error>) -> Void) {

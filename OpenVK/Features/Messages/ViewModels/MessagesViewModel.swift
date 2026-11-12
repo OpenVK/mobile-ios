@@ -417,6 +417,21 @@ final class MessagesViewModel: ObservableObject {
         searchResults = updated(searchResults)
     }
 
+    func updateUnreadCount(_ notification: Notification) {
+        guard let peerID = notification.userInfo?["peerID"] as? Int,
+              let unreadCount = notification.userInfo?["unreadCount"] as? Int else { return }
+        let value = max(0, unreadCount)
+        if let index = conversations.firstIndex(where: { $0.id == peerID }) {
+            conversations[index].unreadCount = value
+        }
+        if let index = searchResults.firstIndex(where: { $0.id == peerID }) {
+            searchResults[index].unreadCount = value
+        }
+        if let index = fetchedArchivedConversations.firstIndex(where: { $0.id == peerID }) {
+            fetchedArchivedConversations[index].unreadCount = value
+        }
+    }
+
     func deleteConversation(_ conversation: Conversation) {
         service.deleteConversation(peerID: conversation.id) { [weak self] result in
             DispatchQueue.main.async {
