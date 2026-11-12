@@ -21,12 +21,15 @@ final class ChatInfoViewModel: ObservableObject {
     @Published private(set) var memberCount: Int
     @Published private(set) var title: String
     @Published private(set) var photoURL: URL?
+    @Published private(set) var permissions = ChatPermissionSettings()
+    @Published private(set) var canEditPermissions = false
     @Published private(set) var isLoadingMembers = false
     @Published private(set) var isMuted = false
     @Published private(set) var isWorking = false
     @Published private(set) var materials: [ChatMaterialSection: MaterialState] = [:]
     @Published var selectedSection: ChatMaterialSection = .members
     @Published var errorMessage: String?
+    @Published var shouldDismiss = false
 
     let conversation: Conversation
     private let service: ChatInfoServiceProtocol
@@ -46,16 +49,36 @@ final class ChatInfoViewModel: ObservableObject {
         memberCount = conversation.chatMemberCount ?? 0
         title = conversation.peer.displayName
         photoURL = conversation.peer.avatarURL
+        selectedSection = conversation.isChat ? .members : .photos
+    }
+
+    var availableSections: [ChatMaterialSection] {
+        ChatMaterialSection.allCases.filter { section in
+            if section == .members { return conversation.isChat }
+            // An API failure is not proof that this category is empty.
+            guard let state = materials[section], state.hasLoaded,
+                  state.items.isEmpty, state.nextFrom == nil, state.error == nil else {
+                return true
+            }
+            return false
+        }
     }
 
     var canAddMembers: Bool { canInvite }
-    var canEdit: Bool { canChangeInfo || canChangePin || canChangeInviteLink || canInvite || canPromote || canModerate }
+    var canEdit: Bool { canChangeInfo || canEditPermissions || canChangePin || canChangeInviteLink || canInvite || canPromote || canModerate }
+    var canEditTitle: Bool { canChangeInfo }
+    var canRegenerateInviteLink: Bool { canChangeInviteLink }
     var memberIDs: Set<Int> { Set(members.map(\.id)) }
 
     func load() {
         guard !membersLoaded else { return }
         membersLoaded = true
-        refreshMembers()
+        if conversation.isChat { refreshMembers() }
+        // Fetch each category once so empty tabs disappear without requiring a tap.
+        // These results are retained and reused when opening the corresponding tab.
+        for section in ChatMaterialSection.allCases where section != .members {
+            loadMaterials(section)
+        }
         Task {
             if let muted = try? await service.getMuted(peerID: conversation.id) {
                 isMuted = muted
@@ -64,7 +87,7 @@ final class ChatInfoViewModel: ObservableObject {
     }
 
     func refreshMembers() {
-        guard !isLoadingMembers else { return }
+        guard conversation.isChat, !isLoadingMembers else { return }
         isLoadingMembers = true
         Task {
             do {
@@ -84,6 +107,8 @@ final class ChatInfoViewModel: ObservableObject {
                 canChangeInfo = page.canChangeInfo
                 canChangePin = page.canChangePin
                 canChangeInviteLink = page.canChangeInviteLink
+                permissions = page.permissions
+                canEditPermissions = page.canEditPermissions
                 isOwner = page.isOwner
             } catch {
                 errorMessage = error.localizedDescription
@@ -147,15 +172,152 @@ final class ChatInfoViewModel: ObservableObject {
         }
     }
 
+    func updateTitle(_ newTitle: String, completion: @escaping (Bool) -> Void) {
+        let value = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canChangeInfo, !value.isEmpty, !isWorking else {
+            completion(false)
+            return
+        }
+        isWorking = true
+        Task {
+            do {
+                try await service.editTitle(peerID: conversation.id, title: value)
+                title = value
+                isWorking = false
+                completion(true)
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+                completion(false)
+            }
+        }
+    }
+
+    func updatePermissions(_ updated: ChatPermissionSettings, completion: @escaping (Bool) -> Void) {
+        guard canEditPermissions, !isWorking else {
+            completion(false)
+            return
+        }
+        isWorking = true
+        Task {
+            do {
+                try await service.setPermissions(peerID: conversation.id, permissions: updated)
+                permissions = updated
+                isWorking = false
+                refreshMembers()
+                completion(true)
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+                completion(false)
+            }
+        }
+    }
+
+    func updateAvatar(_ data: Data) {
+        guard canChangeInfo, !isWorking else { return }
+        isWorking = true
+        Task {
+            do {
+                try await service.updateChatPhoto(peerID: conversation.id, imageData: data)
+                // Force a fresh member/settings response after changing the image.
+                photoURL = nil
+                isWorking = false
+                refreshMembers()
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func removeAvatar() {
+        guard canChangeInfo, !isWorking else { return }
+        isWorking = true
+        Task {
+            do {
+                try await service.deleteChatPhoto(peerID: conversation.id)
+                photoURL = nil
+                isWorking = false
+                refreshMembers()
+            } catch {
+                isWorking = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func markAllAsRead() {
+        MessagesService.shared.markConversationAsRead(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success: AuthService.shared.fetchCounters()
+                case .failure(let error): self?.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func clearHistory() {
+        guard !isWorking else { return }
+        isWorking = true
+        MessagesService.shared.deleteConversation(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isWorking = false
+                switch result {
+                case .success: self.shouldDismiss = true
+                case .failure(let error): self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func leaveConversation() {
+        guard conversation.isChat, !isWorking else { return }
+        isWorking = true
+        MessagesService.shared.leaveChat(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isWorking = false
+                switch result {
+                case .success: self.shouldDismiss = true
+                case .failure(let error): self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func toggleArchive() {
+        ChatArchiveStore.setArchived(
+            !ChatArchiveStore.contains(conversation.id),
+            peerID: conversation.id
+        )
+    }
+
     func copyInviteLink() {
         guard canSeeInviteLink else { return }
         Task {
             do {
-                let link = try await service.getInviteLink(peerID: conversation.id)
+                let link = try await service.getInviteLink(peerID: conversation.id, reset: false)
                 UIPasteboard.general.url = link
             } catch {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    func regenerateInviteLink() {
+        guard canChangeInviteLink, !isWorking else { return }
+        isWorking = true
+        Task {
+            do {
+                let link = try await service.getInviteLink(peerID: conversation.id, reset: true)
+                UIPasteboard.general.url = link
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isWorking = false
         }
     }
 
@@ -181,6 +343,10 @@ final class ChatInfoViewModel: ObservableObject {
                 updated.hasLoaded = true
                 updated.isLoading = false
                 materials[section] = updated
+                if !availableSections.contains(selectedSection),
+                   let replacement = availableSections.first {
+                    selectedSection = replacement
+                }
             } catch {
                 var updated = materials[section] ?? MaterialState()
                 updated.isLoading = false

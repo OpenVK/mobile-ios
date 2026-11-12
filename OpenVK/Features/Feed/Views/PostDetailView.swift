@@ -105,7 +105,7 @@ struct PostDetailView: View {
                 }
             }
             .onChange(of: viewModel.comments.map(\.id)) { ids in
-                guard !didScrollToTarget, let targetCommentID = targetCommentID,
+                guard !didScrollToTarget, let targetCommentID,
                       ids.contains(targetCommentID) else { return }
                 DispatchQueue.main.async {
                     proxy.scrollTo(targetCommentID, anchor: .center)
@@ -114,7 +114,7 @@ struct PostDetailView: View {
             }
             }
 
-            if let edit = viewModel.editingComment {
+            if viewModel.editingComment != nil {
                 HStack {
                     Image(systemName: "pencil")
                         .font(.system(size: 10))

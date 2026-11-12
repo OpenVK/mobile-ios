@@ -14,6 +14,7 @@ private struct SavedChatPosition: Codable {
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published private(set) var messages: [ChatMessage] = []
+    @Published private(set) var pinnedMessage: ChatMessage?
     @Published private(set) var isLoading = false
     private(set) var isLoadingOlder = false
     private(set) var isLoadingNewer = false
@@ -84,6 +85,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func load() {
+        if conversation.isChat { refreshPinnedMessage() }
         guard !isLoading, !isLoadingOlder else { return }
         // A restored page is anchored to a message. Refreshing from offset 0 here
         // would join two non-adjacent ranges and break subsequent pagination.
@@ -97,9 +99,14 @@ final class ChatViewModel: ObservableObject {
         let anchorID = savedMessageID.flatMap { $0 > 0 ? $0 : nil }
         let initialOffset = anchorID == nil ? 0 : -(pageSize / 2)
         if isInitialLoad,
-           let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false),
+           let cachedPage = service.cachedHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false)
+                ?? service.offlineHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false),
            anchorID == nil || cachedPage.messages.contains(where: { $0.id == anchorID }) {
             applyCachedPage(cachedPage, anchorID: anchorID, savedMessageID: savedMessageID)
+        }
+        if isInitialLoad, messages.isEmpty,
+           let saved = service.offlineHistory(peerID: conversation.id, offset: 0, count: pageSize, startMessageID: nil, reverse: false) {
+            applyCachedPage(saved, anchorID: nil, savedMessageID: nil)
         }
         service.fetchHistory(peerID: conversation.id, offset: initialOffset, count: pageSize, startMessageID: anchorID, reverse: false) { [weak self] result in
             guard let self, self.historyRequestToken == requestToken else { return }
@@ -157,7 +164,8 @@ final class ChatViewModel: ObservableObject {
                     self.offset = self.messages.filter { $0.id > 0 }.count
                     self.hasMore = self.offset < self.totalCount && !page.messages.isEmpty
                 }
-            case .failure(let error): self.errorMessage = error.localizedDescription
+            case .failure(let error):
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoading = false
         }
@@ -213,7 +221,8 @@ final class ChatViewModel: ObservableObject {
                 if self.isValidBoundaryPage(page, boundaryID: newestID, newer: true) {
                     self.insertNewer(page)
                 }
-            case .failure(let error): self.errorMessage = error.localizedDescription
+            case .failure(let error):
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoadingNewer = false
         }
@@ -247,9 +256,18 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendPhotos(text: String, photos: [Data], replyTo: Int?, completion: @escaping (Bool) -> Void) {
-        guard canSendMessages, !photos.isEmpty, !isSendingPhotos else { completion(false); return }
+        sendAttachments(text: text, photos: photos, attachments: [], replyTo: replyTo, completion: completion)
+    }
+
+    func sendAttachments(text: String, photos: [Data], attachments: [String], replyTo: Int?,
+                         completion: @escaping (Bool) -> Void) {
+        guard canSendMessages, (!photos.isEmpty || !attachments.isEmpty), !isSendingPhotos else {
+            completion(false)
+            return
+        }
         isSendingPhotos = true
-        service.sendPhotos(peerID: conversation.id, text: text, replyTo: replyTo, photos: photos) { [weak self] result in
+        service.sendAttachments(peerID: conversation.id, text: text, replyTo: replyTo,
+                                photos: photos, attachments: attachments) { [weak self] result in
             guard let self else { completion(false); return }
             self.isSendingPhotos = false
             switch result {
@@ -279,6 +297,84 @@ final class ChatViewModel: ObservableObject {
             guard case .success = result, let self,
                   let index = self.messages.firstIndex(where: { $0.id == message.id }) else { return }
             self.messages[index] = self.messages[index].markingDeleted()
+        }
+    }
+
+    func restore(message: ChatMessage) {
+        guard message.id > 0, message.isDeleted else { return }
+        service.restoreMessage(peerID: conversation.id, messageID: message.id) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                self.load()
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func toggleImportant(message: ChatMessage) {
+        guard message.id > 0, !message.isDeleted else { return }
+        let newValue = !message.isImportant
+        service.markMessageImportant(peerID: conversation.id, messageID: message.id, important: newValue) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                if let index = self.messages.firstIndex(where: { $0.id == message.id }) {
+                    self.messages[index].isImportant = newValue
+                }
+            case .failure(let error):
+                self.errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func refreshPinnedMessage() {
+        guard conversation.isChat else { return }
+        service.fetchPinnedMessage(peerID: conversation.id) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let pinned):
+                    self.pinnedMessage = pinned
+                case .failure:
+                    // Keep the previously displayed pin on transient failures.
+                    break
+                }
+            }
+        }
+    }
+
+    func togglePin(message: ChatMessage) {
+        guard message.id > 0, !message.isDeleted else { return }
+        if message.isPinned {
+            service.unpinMessage(peerID: conversation.id) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    for index in self.messages.indices {
+                        self.messages[index].isPinned = false
+                    }
+                    self.pinnedMessage = nil
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        } else {
+            service.pinMessage(peerID: conversation.id, messageID: message.id) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    for index in self.messages.indices {
+                        self.messages[index].isPinned = self.messages[index].id == message.id
+                    }
+                    var pinned = message
+                    pinned.isPinned = true
+                    self.pinnedMessage = pinned
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -316,6 +412,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendTyping(for text: String) {
+        guard LongPollService.shared.hasNetworkConnection else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard Date().timeIntervalSince(lastTypingSentAt) >= 3 else { return }
         lastTypingSentAt = Date()
@@ -386,6 +483,7 @@ final class ChatViewModel: ObservableObject {
     func markVisibleMessagesAsRead(through messageID: Int) {
         guard !isLoading, pendingScrollRequestID == nil, messageID >= readThroughMessageID,
               messages.contains(where: { $0.id == messageID }) else { return }
+
         let newlyRead = messages.filter {
             !$0.isOutgoing && $0.incomingReadState == 0
                 && $0.id > readThroughMessageID && $0.id <= messageID
@@ -394,6 +492,7 @@ final class ChatViewModel: ObservableObject {
             && messageID >= max(conversation.lastMessageId, messages.last(where: { $0.id > 0 })?.id ?? 0)
         let remaining = reachedLatest ? 0 : max(0, unreadMessageCount - newlyRead.count)
         guard remaining != unreadMessageCount || !newlyRead.isEmpty else { return }
+
         readThroughMessageID = messageID
         updateUnreadMessageCount(remaining)
         pendingReadMessageID = messageID
@@ -418,16 +517,19 @@ final class ChatViewModel: ObservableObject {
         guard !isMarkingRead, let messageID = pendingReadMessageID else { return }
         pendingReadMessageID = nil
         isMarkingRead = true
-        service.markAsRead(peerID: conversation.id, through: messageID) { [self] result in
+        service.markAsRead(peerID: conversation.id, through: messageID) { [weak self] result in
             Task { @MainActor in
-                isMarkingRead = false
+                guard let self else { return }
+                self.isMarkingRead = false
                 switch result {
                 case .success:
                     AuthService.shared.fetchCounters()
-                    flushPendingRead()
+                    self.flushPendingRead()
                 case .failure(let error):
-                    pendingReadMessageID = max(pendingReadMessageID ?? 0, messageID)
-                    errorMessage = error.localizedDescription
+                    self.pendingReadMessageID = max(self.pendingReadMessageID ?? 0, messageID)
+                    if !MessagesService.isConnectionFailure(error) {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }
@@ -449,24 +551,37 @@ final class ChatViewModel: ObservableObject {
 
     var peerPresenceText: String? {
         guard !conversation.isChat, !conversation.isGroup else { return nil }
-        if isPeerOnline {
-            if let platform = conversation.peer.onlinePlatform, !platform.isEmpty {
-                return "В сети · \(platform)"
-            }
-            return "В сети"
-        }
+        if isPeerOnline { return "В сети" }
         if let peerLastSeen {
             return peerLastSeen.openvkLastSeen(sex: conversation.peer.sex)
         }
         return conversation.peer.lastSeen ?? "Не в сети"
     }
 
+    func refreshAfterReconnect() {
+        if historyAnchorID != nil {
+            refreshPinnedMessage()
+            _ = loadNewerIfNeeded()
+        } else {
+            load()
+        }
+    }
+
     func startListening() {
+        guard observer == nil else { return }
         observer = NotificationCenter.default.addObserver(forName: .openvkLongPollDidReceiveEvent, object: nil, queue: .main) { [weak self] note in
             Task { @MainActor [weak self] in
                 guard let self, let type = note.userInfo?["type"] as? Int else { return }
-                if type == 3 {
-                    self.handleReadFlagEvent(note)
+                if type == 2 || type == 3 {
+                    self.handleMessageFlagEvent(note, setting: type == 2)
+                    if let event = note.userInfo?["event"] as? [Any],
+                       event.count > 2, let mask = event[2] as? Int,
+                       (mask & 256) != 0 {
+                        self.refreshPinnedMessage()
+                    }
+                    if type == 3 {
+                        self.handleReadFlagEvent(note)
+                    }
                 } else if type == 13 {
                     self.handleDeletedMessageEvent(note)
                 } else if type == 7 {
@@ -477,6 +592,7 @@ final class ChatViewModel: ObservableObject {
                     self.updatePeerPresence(note, isOnline: type == 8)
                 } else if type == 4 || type == 5 || type == 14 || type == 51 || type == 52 {
                     if let peerID = note.userInfo?["peerID"] as? Int, peerID != self.conversation.id { return }
+                    self.refreshPinnedMessage()
                     self.load()
                 } else if (61...64).contains(type) {
                     self.updateTyping(note)
@@ -562,13 +678,28 @@ final class ChatViewModel: ObservableObject {
         ) { [weak self] result in
             guard let self, case .success(let profiles) = result else { return }
             for profile in profiles {
-                let name = "\(profile.firstName ?? "") \(profile.lastName ?? "")"
+                let name = (profile.firstName ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 self.typingNames[profile.id] = name.isEmpty
                     ? (profile.screenName ?? "Пользователь \(profile.id)")
                     : name
             }
             self.updateTypingText()
+        }
+    }
+
+    private func handleMessageFlagEvent(_ note: Notification, setting: Bool) {
+        guard let peerID = note.userInfo?["peerID"] as? Int, peerID == conversation.id,
+              let messageID = note.userInfo?["messageID"] as? Int,
+              let event = note.userInfo?["event"] as? [Any], event.count > 2,
+              let mask = event[2] as? Int,
+              let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
+
+        if mask & 8 == 8 {
+            messages[index].isImportant = setting
+        }
+        if mask & 256 == 256 {
+            messages[index].isPinned = setting
         }
     }
 
@@ -677,7 +808,7 @@ final class ChatViewModel: ObservableObject {
                 self.prefetchMedia(for: page.messages)
                 self.requestScroll(.bottom(animated: animated))
             case .failure(let error):
-                self.errorMessage = error.localizedDescription
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoading = false
         }
@@ -702,7 +833,7 @@ final class ChatViewModel: ObservableObject {
                     self.applyPageAround(page, messageID: messageID)
                 }
             case .failure(let error):
-                self.errorMessage = error.localizedDescription
+                if !MessagesService.isConnectionFailure(error) { self.errorMessage = error.localizedDescription }
             }
             self.isLoading = false
         }

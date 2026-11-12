@@ -70,12 +70,14 @@ struct RemoteImage<Placeholder: View>: View {
         @ViewBuilder placeholder: () -> Placeholder
     ) {
         self.url = url
+        _loader = StateObject(wrappedValue: ImageLoader(url: url))
         self.forceRefreshOnAppear = forceRefreshOnAppear
         self.refreshToken = refreshToken
         self.placeholder = placeholder()
     }
 
     init(url: URL, placeholder: Placeholder) {
+        _loader = StateObject(wrappedValue: ImageLoader(url: url))
         self.url = url
         self.placeholder = placeholder
     }
@@ -108,27 +110,31 @@ final class ImageLoader: ObservableObject {
     private var loadedURL: URL?
     private let avatarMaximumAge: TimeInterval = 60
 
+    init(url: URL? = nil) {
+        if let url {
+            loadedURL = url
+            image = ImageCache.shared.image(for: url, maximumAge: .greatestFiniteMagnitude)
+        }
+    }
+
     func load(from url: URL, forceRefresh: Bool = false) {
+        let previousImage = ImageCache.shared.image(for: url, maximumAge: .greatestFiniteMagnitude)
         let cachedImage = ImageCache.shared.image(for: url, maximumAge: avatarMaximumAge)
         let isSameURL = loadedURL == url
-
-        if !forceRefresh, isSameURL, let cachedImage {
-            image = cachedImage
-            return
-        }
-
         loadedURL = url
-        if !forceRefresh || !isSameURL {
+        if !isSameURL || image == nil {
+            image = cachedImage ?? previousImage
+        } else if let cachedImage {
             image = cachedImage
         }
-        guard forceRefresh || image == nil else { return }
+        guard forceRefresh || cachedImage == nil else { return }
 
         ImageCache.shared.load(
             url,
             maximumAge: avatarMaximumAge,
             forceRefresh: forceRefresh
         ) { [weak self] image in
-            guard let self = self, self.loadedURL == url else { return }
+            guard let self, self.loadedURL == url, let image else { return }
             self.image = image
         }
     }

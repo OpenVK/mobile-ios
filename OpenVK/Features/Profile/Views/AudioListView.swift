@@ -238,16 +238,18 @@ struct AudioListView: View {
                     AudioTrackRow(track: track, queue: displayedTracks)
                         .padding(.horizontal, 16)
                         .onAppear {
-                            if track.id == displayedTracks.last?.id,
-                               selectedTab == .popular,
-                               viewModel.hasMorePopular {
-                                viewModel.loadMorePopular()
+                            guard track.id == displayedTracks.last?.id else { return }
+                            switch selectedTab {
+                            case .mine:
+                                if viewModel.hasMoreMy { viewModel.loadMoreMy() }
+                            case .popular:
+                                if viewModel.hasMorePopular { viewModel.loadMorePopular() }
                             }
                         }
                     SectionSeparator()
                 }
 
-                if viewModel.isLoadingMorePopular {
+                if viewModel.isLoadingMoreMy || viewModel.isLoadingMorePopular {
                     HStack {
                         Spacer()
                         ProgressView()
@@ -353,6 +355,8 @@ private final class AudioLibraryViewModel: ObservableObject {
     @Published var isNetworkUnavailable = false
     @Published var isLoading = false
     @Published var isLoadingPopular = false
+    @Published var isLoadingMoreMy = false
+    @Published var hasMoreMy = true
     @Published var isLoadingMorePopular = false
     @Published var hasMorePopular = true
     @Published var isSearching = false
@@ -361,6 +365,9 @@ private final class AudioLibraryViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     private var loadedOwnerID: Int?
+    private var myLoadGeneration = 0
+    private var nextMyOffset = 0
+    private let myPageSize = 100
     private var didLoadPopular = false
     private let popularPageSize = 50
     private var searchWorkItem: DispatchWorkItem?
@@ -378,6 +385,11 @@ private final class AudioLibraryViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         loadedOwnerID = ownerID
+        myLoadGeneration += 1
+        let generation = myLoadGeneration
+        nextMyOffset = 0
+        isLoadingMoreMy = false
+        hasMoreMy = true
 
         let group = DispatchGroup()
         var firstError: String?
@@ -396,16 +408,20 @@ private final class AudioLibraryViewModel: ObservableObject {
         }
 
         group.enter()
-        AudioService.shared.getTracks(ownerID: ownerID) { [weak self] result in
+        AudioService.shared.getTracks(ownerID: ownerID, offset: 0, count: myPageSize) { [weak self] result in
             DispatchQueue.main.async {
-                if case .success(let tracks) = result {
-                    self?.tracks = tracks
-                    self?.isNetworkUnavailable = false
-                    AudioLibraryMembership.shared.seedAdded(tracks)
-                } else if case .failure(let error) = result {
-                    firstError = firstError ?? error.localizedDescription
-                    if case .transport = error { tracksUnavailable = true }
-                    if case .http(let status) = error, status >= 500 { tracksUnavailable = true }
+                if let self, self.myLoadGeneration == generation {
+                    if case .success(let tracks) = result {
+                        self.tracks = tracks
+                        self.nextMyOffset = tracks.count
+                        self.hasMoreMy = tracks.count >= self.myPageSize
+                        self.isNetworkUnavailable = false
+                        AudioLibraryMembership.shared.seedAdded(tracks)
+                    } else if case .failure(let error) = result {
+                        firstError = firstError ?? error.localizedDescription
+                        if case .transport = error { tracksUnavailable = true }
+                        if case .http(let status) = error, status >= 500 { tracksUnavailable = true }
+                    }
                 }
                 group.leave()
             }
@@ -416,6 +432,28 @@ private final class AudioLibraryViewModel: ObservableObject {
             self?.errorMessage = firstError
             if tracksUnavailable { self?.isNetworkUnavailable = true }
             completion?()
+        }
+    }
+
+    func loadMoreMy() {
+        guard let ownerID = loadedOwnerID, !isLoading, !isLoadingMoreMy, hasMoreMy else { return }
+        isLoadingMoreMy = true
+        let offset = nextMyOffset
+        let generation = myLoadGeneration
+        AudioService.shared.getTracks(ownerID: ownerID, offset: offset, count: myPageSize) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, self.myLoadGeneration == generation, self.loadedOwnerID == ownerID else { return }
+                self.isLoadingMoreMy = false
+                switch result {
+                case .success(let page):
+                    self.nextMyOffset = offset + page.count
+                    self.hasMoreMy = page.count >= self.myPageSize
+                    self.tracks.append(contentsOf: page)
+                    AudioLibraryMembership.shared.seedAdded(page)
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -592,7 +630,11 @@ private struct AudioPlaylistDetailView: View {
     let playlist: AudioPlaylist
     @State private var tracks: [AudioTrack] = []
     @State private var isLoading = true
+    @State private var isLoadingMore = false
+    @State private var hasMore = true
+    @State private var nextOffset = 0
     @State private var errorMessage: String?
+    private let pageSize = 100
 
     var body: some View {
         ScrollView {
@@ -632,7 +674,25 @@ private struct AudioPlaylistDetailView: View {
                     ForEach(tracks) { track in
                         AudioTrackRow(track: track, queue: tracks)
                             .padding(.horizontal, 16)
+                            .onAppear {
+                                if track.id == tracks.last?.id { loadMore() }
+                            }
                         SectionSeparator()
+                    }
+                    if isLoadingMore {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                    }
+                    if let errorMessage {
+                        VStack(spacing: 8) {
+                            Text(errorMessage).font(.caption).foregroundStyle(.secondary)
+                            if hasMore {
+                                Button("Повторить") { loadMore() }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
                     }
                 }
             }
@@ -648,16 +708,47 @@ private struct AudioPlaylistDetailView: View {
         AudioService.shared.getTracks(
             ownerID: playlist.ownerID,
             playlistID: playlist.id,
+            offset: 0,
+            count: pageSize,
             artworkURL: playlist.coverURL
         ) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let resultTracks):
                     tracks = resultTracks
+                    nextOffset = resultTracks.count
+                    hasMore = resultTracks.count >= pageSize
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                    hasMore = false
+                }
+                isLoading = false
+            }
+        }
+    }
+
+    private func loadMore() {
+        guard !isLoading, !isLoadingMore, hasMore else { return }
+        isLoadingMore = true
+        errorMessage = nil
+        let offset = nextOffset
+        AudioService.shared.getTracks(
+            ownerID: playlist.ownerID,
+            playlistID: playlist.id,
+            offset: offset,
+            count: pageSize,
+            artworkURL: playlist.coverURL
+        ) { result in
+            DispatchQueue.main.async {
+                isLoadingMore = false
+                switch result {
+                case .success(let page):
+                    nextOffset = offset + page.count
+                    hasMore = page.count >= pageSize
+                    tracks.append(contentsOf: page)
                 case .failure(let error):
                     errorMessage = error.localizedDescription
                 }
-                isLoading = false
             }
         }
     }
@@ -1135,7 +1226,8 @@ struct GlobalAudioPlayerOverlay: View {
     @State private var dragOffset: CGFloat = 0
     @State private var measuredTabBarInset: CGFloat = 0
 
-    private let miniPlayerHeight: CGFloat = 52
+    private var isTablet: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private var miniPlayerHeight: CGFloat { isTablet ? 96 : 52 }
     private let tabBarBaseHeight: CGFloat = 49
 
     private var isIOS26OrNewer: Bool {
@@ -1155,16 +1247,16 @@ struct GlobalAudioPlayerOverlay: View {
                     ? CGFloat(0)
                     : max(0, globalFrame.maxY - keyboard.endFrame.minY)
                 let effectiveTabBarInset: CGFloat = {
-                    if measuredTabBarInset > 0 {
-                        return measuredTabBarInset
-                    }
+                    // The iPad sidebar replaces the iPhone tab bar.
+                    if isTablet { return bottomInset }
+                    if measuredTabBarInset > 0 { return measuredTabBarInset }
                     let baseBarHeight: CGFloat = isIOS26OrNewer ? 128 : tabBarBaseHeight
                     return baseBarHeight + bottomInset
                 }()
                 let dockInset = keyboardOverlap > 0
                     ? keyboardOverlap
                     : effectiveTabBarInset
-                let floatGap: CGFloat = keyboardOverlap > 0 ? 0 : (isIOS26OrNewer ? 8 : 0)
+                let floatGap: CGFloat = keyboardOverlap > 0 ? 0 : (isTablet ? 8 : (isIOS26OrNewer ? 8 : 0))
                 let collapsedOffset = max(
                     0,
                     geometry.size.height - dockInset - miniPlayerHeight - floatGap
@@ -1383,6 +1475,7 @@ private struct AudioPlayerSheet: View {
                     miniPlayerCard
                         .opacity(miniOpacity)
                         .simultaneousGesture(horizontalSwipeGesture)
+                        .simultaneousGesture(dismissMiniPlayerGesture)
                 }
             }
             .frame(height: miniPlayerHeight)
@@ -1409,6 +1502,22 @@ private struct AudioPlayerSheet: View {
                 .opacity(expandedOpacity)
                 .allowsHitTesting(player.isExpanded)
         )
+    }
+
+    // A downward swipe on the collapsed bar dismisses the entire session.
+    // AudioPlayerService.stop() cancels active playback and also clears a
+    // paused track, queue, progress, Now Playing and remote controls.
+    private var dismissMiniPlayerGesture: some Gesture {
+        DragGesture(minimumDistance: 20, coordinateSpace: .local)
+            .onEnded { value in
+                guard progress < 0.1 else { return }
+                let vertical = value.translation.height
+                let horizontal = value.translation.width
+                guard vertical > 75,
+                      vertical > abs(horizontal) * 1.3 else { return }
+                HapticManager.impact(.light)
+                player.stop()
+            }
     }
 
     private var horizontalSwipeGesture: some Gesture {
@@ -1546,6 +1655,9 @@ private struct MiniAudioPlayerView: View {
     @ObservedObject private var player = AudioPlayerService.shared
     @ObservedObject private var membership = AudioLibraryMembership.shared
 
+    private var isTablet: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    private var buttonSize: CGFloat { isTablet ? 48 : 32 }
+
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -1573,11 +1685,11 @@ private struct MiniAudioPlayerView: View {
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(track.title)
-                        .font(.system(size: 13.5, weight: .semibold))
+                        .font(.system(size: UIDevice.current.userInterfaceIdiom == .pad ? 19 : 13.5, weight: .semibold))
                         .foregroundColor(.primary)
                         .lineLimit(1)
                     Text(track.artist)
-                        .font(.system(size: 11.5, weight: .regular))
+                        .font(.system(size: UIDevice.current.userInterfaceIdiom == .pad ? 15 : 11.5, weight: .regular))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                 }
@@ -1595,10 +1707,10 @@ private struct MiniAudioPlayerView: View {
                             .scaleEffect(0.7)
                     } else {
                         Image(systemName: membership.isAdded(track) ? "checkmark" : "plus")
-                            .font(.system(size: isIOS26 ? 16 : 15, weight: .semibold))
+                            .font(.system(size: isTablet ? 24 : (isIOS26 ? 16 : 15), weight: .semibold))
                     }
                 }
-                .frame(width: 32, height: 32)
+                .frame(width: buttonSize, height: buttonSize)
                 .contentShape(Rectangle())
             }
             .buttonStyle(MiniPlayerButtonStyle())
@@ -1607,15 +1719,15 @@ private struct MiniAudioPlayerView: View {
 
             if player.isPreparing {
                 ProgressView()
-                    .frame(width: 32, height: 32)
+                    .frame(width: buttonSize, height: buttonSize)
             } else {
                 Button(action: {
                     HapticManager.impact(.light)
                     player.togglePlayPause()
                 }) {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: isIOS26 ? 16 : 15, weight: .semibold))
-                        .frame(width: 32, height: 32)
+                        .font(.system(size: isTablet ? 24 : (isIOS26 ? 16 : 15), weight: .semibold))
+                        .frame(width: buttonSize, height: buttonSize)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(MiniPlayerButtonStyle())
@@ -1651,37 +1763,88 @@ private struct ExpandedAudioPlayerView: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let height = geometry.size.height
+            if UIDevice.current.userInterfaceIdiom == .pad && width > height {
+                landscapeTabletPlayer(width: width, height: height)
+            } else {
+                compactPlayer(width: width, height: height)
+            }
+        }
+    }
 
-            ZStack(alignment: .bottom) {
-                // Page 0: Controls
-                ExpandedAudioPlayerControlsView(track: track)
-                    .frame(width: width, height: height)
-                    .offset(x: selectedPage == 0 ? horizontalDragOffset : -width + horizontalDragOffset)
-                    .gesture(page0Gesture(width: width))
+    // On landscape iPads the queue slides in alongside the controls instead
+    // of replacing them. Animate the width of the left panel so its artwork
+    // shifts left as the queue appears. All other devices use the old pager.
+    private func landscapeTabletPlayer(width: CGFloat, height: CGFloat) -> some View {
+        let queueWidth = min(560, max(360, width * 0.45))
+        let leftWidth = selectedPage == 1 ? width - queueWidth : width
 
-                // Page 1: Queue
+        return HStack(spacing: 0) {
+            ExpandedAudioPlayerControlsView(track: track)
+                .frame(width: leftWidth, height: height)
+                .offset(
+                    x: selectedPage == 0
+                        ? min(0, horizontalDragOffset) * 0.12
+                        : min(12, max(0, horizontalDragOffset) * 0.5)
+                )
+                .gesture(page0Gesture(width: width, allowsQueueDismiss: true))
+
+            if selectedPage == 1 {
                 AudioPlaybackQueueView(
                     dragOffset: $dragOffset,
                     collapsedOffset: collapsedOffset,
                     horizontalDragOffset: $horizontalDragOffset,
                     selectedPage: $selectedPage,
-                    screenWidth: width
+                    screenWidth: queueWidth
                 )
-                .frame(width: width, height: height)
-                .offset(x: selectedPage == 1 ? horizontalDragOffset : width + horizontalDragOffset)
-                .allowsHitTesting(selectedPage == 1)
-
-                AudioPlayerBottomBar(
-                    showQueue: showQueue,
-                    bottomInset: bottomInset,
-                    selectPlayer: { selectPage(0) },
-                    selectQueue: { selectPage(1) }
-                )
-                .playerDragDismiss(dragOffset: $dragOffset, collapsedOffset: collapsedOffset)
+                .frame(width: queueWidth, height: height)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
-            .clipped()
-            .background(Color(.systemBackground))
         }
+        .frame(width: width, height: height, alignment: .leading)
+        .overlay(alignment: .bottomLeading) {
+            // Keep shuffle, page controls and repeat within the left pane.
+            // Otherwise the repeat button covers the queue on landscape iPad.
+            playerBottomBar
+                .frame(width: leftWidth)
+        }
+        .clipped()
+        .background(Color(.systemBackground))
+        .animation(.spring(response: 0.36, dampingFraction: 0.88), value: selectedPage)
+    }
+
+    private func compactPlayer(width: CGFloat, height: CGFloat) -> some View {
+        ZStack(alignment: .bottom) {
+            ExpandedAudioPlayerControlsView(track: track)
+                .frame(width: width, height: height)
+                .offset(x: selectedPage == 0 ? horizontalDragOffset : -width + horizontalDragOffset)
+                .gesture(page0Gesture(width: width))
+
+            AudioPlaybackQueueView(
+                dragOffset: $dragOffset,
+                collapsedOffset: collapsedOffset,
+                horizontalDragOffset: $horizontalDragOffset,
+                selectedPage: $selectedPage,
+                screenWidth: width
+            )
+            .frame(width: width, height: height)
+            .offset(x: selectedPage == 1 ? horizontalDragOffset : width + horizontalDragOffset)
+            .allowsHitTesting(selectedPage == 1)
+
+            playerBottomBar
+        }
+        .frame(width: width, height: height)
+        .clipped()
+        .background(Color(.systemBackground))
+    }
+
+    private var playerBottomBar: some View {
+        AudioPlayerBottomBar(
+            showQueue: showQueue,
+            bottomInset: bottomInset,
+            selectPlayer: { selectPage(0) },
+            selectQueue: { selectPage(1) }
+        )
+        .playerDragDismiss(dragOffset: $dragOffset, collapsedOffset: collapsedOffset)
     }
 
     private func selectPage(_ page: Int) {
@@ -1691,7 +1854,7 @@ private struct ExpandedAudioPlayerView: View {
         }
     }
 
-    private func page0Gesture(width: CGFloat) -> some Gesture {
+    private func page0Gesture(width: CGFloat, allowsQueueDismiss: Bool = false) -> some Gesture {
         DragGesture(minimumDistance: 10, coordinateSpace: .global)
             .onChanged { value in
                 let dx = value.translation.width
@@ -1707,7 +1870,12 @@ private struct ExpandedAudioPlayerView: View {
 
                 switch dragAxis {
                 case .horizontal:
-                    if dx < 0 {
+                    if allowsQueueDismiss && selectedPage == 1 {
+                        // The controls remain visible beside the queue.
+                        // A rightward swipe from anywhere in this left pane
+                        // should close the queue just as a swipe on the right does.
+                        horizontalDragOffset = dx > 0 ? min(30, dx * 0.2) : 0
+                    } else if dx < 0 {
                         horizontalDragOffset = max(-width, dx)
                     } else {
                         horizontalDragOffset = min(30, dx * 0.2)
@@ -1734,7 +1902,19 @@ private struct ExpandedAudioPlayerView: View {
 
                 switch activeAxis {
                 case .horizontal:
-                    if dx < -45 || predictedX < -90 {
+                    if allowsQueueDismiss && selectedPage == 1 {
+                        if dx > 45 || predictedX > 90 {
+                            HapticManager.impact(.light)
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                                selectedPage = 0
+                                horizontalDragOffset = 0
+                            }
+                        } else {
+                            withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                                horizontalDragOffset = 0
+                            }
+                        }
+                    } else if dx < -45 || predictedX < -90 {
                         HapticManager.impact(.light)
                         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
                             selectedPage = 1
@@ -1980,7 +2160,7 @@ private struct AudioPlaybackQueueView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(player.upcomingQueue.prefix(150)) { entry in
+                        ForEach(player.upcomingQueue) { entry in
                             HStack(spacing: 12) {
                                 AudioArtworkView(track: entry.track, cornerRadius: 8)
                                     .frame(width: 48, height: 48)

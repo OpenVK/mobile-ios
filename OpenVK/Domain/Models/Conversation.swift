@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct Conversation: Identifiable, Hashable {
+struct Conversation: Identifiable, Hashable, Codable {
     let id: Int
     let peer: User
     let lastMessage: String
@@ -19,10 +19,20 @@ struct Conversation: Identifiable, Hashable {
     var isChat: Bool
     var isChatMember: Bool = true
     var chatMemberCount: Int? = nil
+
+    // Modern OpenVK IM conversation state.
+    var inReadMessageID: Int = 0
+    var outReadMessageID: Int = 0
+    var inReadConversationMessageID: Int = 0
+    var outReadConversationMessageID: Int = 0
+    var lastConversationMessageID: Int = 0
+    var isImportant: Bool = false
+    var isUnanswered: Bool = false
+
     var isGroup: Bool { peer.isGroup == true }
 }
 
-struct ConversationsPage {
+struct ConversationsPage: Codable {
     let totalCount: Int
     let conversations: [Conversation]
 }
@@ -59,7 +69,14 @@ struct VKConversationItem: Decodable {
 struct VKConversationInfo: Decodable {
     let peer: VKConversationPeer
     let lastMessageId: Int?
+    let lastConversationMessageId: Int?
     let unreadCount: Int?
+    let inRead: Int?
+    let outRead: Int?
+    let inReadCmid: Int?
+    let outReadCmid: Int?
+    let important: Bool?
+    let unanswered: Bool?
     let chatSettings: VKChatSettings?
     let canWrite: VKConversationCanWrite?
 }
@@ -74,6 +91,7 @@ struct VKChatSettings: Decodable {
     let photo100: String?
     let state: String?
     let membersCount: Int?
+    let pinnedMessage: VKHistoryMessage?
 }
 
 struct VKConversationCanWrite: Decodable {
@@ -103,6 +121,55 @@ struct VKConversationAttachment: Decodable {
     let wall: VKMessageWallAttachment?
     let poll: VKPollAttachment?
     let link: VKMessageLinkAttachment?
+    let gift: VKMessageGiftAttachment?
+}
+
+// Gift attachments may expose thumbnails at the top level or within "gift".
+struct VKMessageGiftAsset: Decodable {
+    let thumb48: String?
+    let thumb96: String?
+    let thumb256: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case thumb48 = "thumb_48"
+        case thumb96 = "thumb_96"
+        case thumb256 = "thumb_256"
+    }
+}
+
+struct VKMessageGiftAttachment: Decodable {
+    let gift: VKMessageGiftAsset?
+    let message: String?
+    let thumb48: String?
+    let thumb96: String?
+    let thumb256: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case gift, message
+        case thumb48 = "thumb_48"
+        case thumb96 = "thumb_96"
+        case thumb256 = "thumb_256"
+    }
+}
+
+struct ChatGift: Hashable, Codable {
+    let previewURL: URL?
+    let caption: String?
+
+    init(_ gift: VKMessageGiftAttachment?) {
+        let nested = gift?.gift
+        let thumbnailCandidates: [String?] = [
+            nested?.thumb256,
+            gift?.thumb256,
+            nested?.thumb96,
+            gift?.thumb96,
+            nested?.thumb48,
+            gift?.thumb48
+        ]
+        let thumbnailURL: String? = thumbnailCandidates.compactMap { $0 }.first
+        previewURL = thumbnailURL.flatMap { URL(string: $0) }
+        caption = gift?.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct VKMessageLinkAttachment: Decodable {
@@ -110,13 +177,19 @@ struct VKMessageLinkAttachment: Decodable {
     let url: String?
 }
 
+struct VKWallViewCount: Decodable {
+    let count: Int?
+}
+
 struct VKMessageWallAttachment: Decodable {
     let id: Int?
     let ownerId: Int?
     let fromId: Int?
+    let date: Int?
     let text: String?
     let authorName: String?
     let authorAvatar: String?
+    let views: VKWallViewCount?
     let attachments: [VKConversationAttachment]?
 }
 
@@ -179,6 +252,8 @@ struct ChatLink: Hashable, Codable {
 struct ChatWallPost: Hashable, Codable {
     let authorName: String
     let authorAvatarURL: URL?
+    let publicationDate: Date?
+    let viewCount: Int?
     let text: String
     let url: URL?
     let attachments: [ChatWallAttachment]
@@ -192,8 +267,13 @@ struct ChatWallPost: Hashable, Codable {
     }
 
     init(_ wall: VKMessageWallAttachment, depth: Int) {
-        authorName = wall.authorName?.isEmpty == false ? wall.authorName! : "Запись"
+        let ownerID = wall.fromId ?? wall.ownerId ?? 0
+        authorName = wall.authorName?.isEmpty == false
+            ? wall.authorName!
+            : (ownerID < 0 ? "Сообщество" : "Пользователь")
         authorAvatarURL = wall.authorAvatar.flatMap(URL.init)
+        publicationDate = wall.date.flatMap { $0 > 0 ? Date(timeIntervalSince1970: TimeInterval($0)) : nil }
+        viewCount = wall.views?.count
         text = wall.text ?? ""
         if let ownerID = wall.ownerId ?? wall.fromId, let id = wall.id {
             url = URL(string: "\(AppConfig.webBaseURL.absoluteString)wall\(ownerID)_\(id)")
@@ -271,6 +351,7 @@ enum ChatRichAttachment: Hashable, Codable {
     case poll(ChatPoll)
     case link(ChatLink)
     case sticker(URL)
+    case gift(ChatGift)
     case unsupported(String)
 
     var photos: [ChatPhoto] {
@@ -298,6 +379,8 @@ enum ChatRichAttachment: Hashable, Codable {
         case "wall":
             guard let wall = attachment.wall, depth < 2 else { return nil }
             self = .wall(ChatWallPost(wall, depth: depth))
+        case "gift":
+            self = .gift(ChatGift(attachment.gift))
         case "poll":
             guard let poll = attachment.poll else { return nil }
             self = .poll(ChatPoll(poll))
@@ -517,7 +600,10 @@ struct VKMessagesHistoryResponse: Decodable {
 
 struct VKHistoryMessage: Decodable {
     let id: Int?
+    let conversationMessageId: Int?
+    let randomId: Int?
     let fromId: Int?
+    let peerId: Int?
     let date: Int?
     let out: Int?
     let body: String?
@@ -525,6 +611,9 @@ struct VKHistoryMessage: Decodable {
     let attachments: [VKConversationAttachment]?
     let deleted: Int?
     let readState: Int?
+    let readBy: [Int]?
+    let important: Bool?
+    let isPinned: Int?
     let action: VKMessageAction?
     let actionMid: Int?
     let edited: Bool?
@@ -636,6 +725,15 @@ struct ChatMessage: Identifiable, Hashable, Codable {
     var incomingReadState: Int? = nil
     let endsChatParticipation: Bool
 
+    // Modern OpenVK IM metadata. These are mutable so local actions can update
+    // the UI immediately while Long Poll/API history later reconciles state.
+    var conversationMessageID: Int? = nil
+    var randomID: Int? = nil
+    var peerID: Int? = nil
+    var readBy: [Int] = []
+    var isImportant: Bool = false
+    var isPinned: Bool = false
+
     var allPhotos: [ChatPhoto] {
         (richAttachments?.flatMap(\.photos) ?? photos)
             + (forwardedMessages ?? []).flatMap(\.photos)
@@ -706,6 +804,12 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isEdited = message.edited == true || message.editedAt != nil
         deliveryStatus = isOutgoing ? ((message.readState ?? 0) == 1 ? .read : .unread) : nil
         incomingReadState = isOutgoing ? nil : message.readState
+        conversationMessageID = message.conversationMessageId
+        randomID = message.randomId
+        peerID = message.peerId
+        readBy = message.readBy ?? []
+        isImportant = message.important == true
+        isPinned = message.isPinned == 1
     }
 
     private init(
@@ -731,7 +835,13 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         isEdited: Bool = false,
         deliveryStatus: MessageDeliveryStatus?,
         incomingReadState: Int? = nil,
-        endsChatParticipation: Bool = false
+        endsChatParticipation: Bool = false,
+        conversationMessageID: Int? = nil,
+        randomID: Int? = nil,
+        peerID: Int? = nil,
+        readBy: [Int] = [],
+        isImportant: Bool = false,
+        isPinned: Bool = false
     ) {
         self.id = id
         self.text = text
@@ -756,6 +866,12 @@ struct ChatMessage: Identifiable, Hashable, Codable {
         self.deliveryStatus = deliveryStatus
         self.incomingReadState = incomingReadState
         self.endsChatParticipation = endsChatParticipation
+        self.conversationMessageID = conversationMessageID
+        self.randomID = randomID
+        self.peerID = peerID
+        self.readBy = readBy
+        self.isImportant = isImportant
+        self.isPinned = isPinned
     }
 
     static func pending(text: String, replyTo: ChatMessage? = nil) -> ChatMessage {
@@ -835,7 +951,14 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             isDeleted: isDeleted,
             isEdited: isEdited,
             deliveryStatus: status,
-            incomingReadState: incomingReadState
+            incomingReadState: incomingReadState,
+            endsChatParticipation: endsChatParticipation,
+            conversationMessageID: conversationMessageID,
+            randomID: randomID,
+            peerID: peerID,
+            readBy: readBy,
+            isImportant: isImportant,
+            isPinned: isPinned
         )
     }
 
@@ -847,7 +970,9 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
             systemEventText: systemEventText, isDeleted: isDeleted, isEdited: true, deliveryStatus: deliveryStatus,
-            incomingReadState: incomingReadState
+            incomingReadState: incomingReadState,
+            endsChatParticipation: endsChatParticipation, conversationMessageID: conversationMessageID,
+            randomID: randomID, peerID: peerID, readBy: readBy, isImportant: isImportant, isPinned: isPinned
         )
     }
 
@@ -859,7 +984,9 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             documents: documents, gifs: gifs, richAttachments: richAttachments,
             forwardedMessages: forwardedMessages, reply: reply,
             systemEventText: systemEventText, isDeleted: true, isEdited: isEdited, deliveryStatus: deliveryStatus,
-            incomingReadState: incomingReadState
+            incomingReadState: incomingReadState,
+            endsChatParticipation: endsChatParticipation, conversationMessageID: conversationMessageID,
+            randomID: randomID, peerID: peerID, readBy: readBy, isImportant: isImportant, isPinned: isPinned
         )
     }
 
@@ -928,6 +1055,29 @@ struct ChatMessage: Identifiable, Hashable, Codable {
             return "\(actorName) закрепил(а) сообщение"
         case "chat_unpin_message":
             return "\(actorName) открепил(а) сообщение"
+        case "coins_transfer":
+            // member_id is the number of voices here, not another user's ID.
+            let amount = memberID.flatMap { $0 > 0 ? $0 : nil }
+            let quantity: String
+            if let amount {
+                let lastTwo = amount % 100
+                let last = amount % 10
+                let noun = (11...14).contains(lastTwo) ? "голосов"
+                    : last == 1 ? "голос"
+                    : (2...4).contains(last) ? "голоса" : "голосов"
+                quantity = "\(amount) \(noun)"
+            } else {
+                quantity = "голоса"
+            }
+            let headline = actorID == AuthService.shared.currentUser?.uid
+                ? "Вы отправили \(quantity)"
+                : "\(actorName) отправил(а) вам \(quantity)"
+            let note = action?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return note.isEmpty ? headline : "\(headline): «\(note)»"
+        case "rating_up":
+            let note = action?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return note.isEmpty ? "\(actorName) повысил(а) рейтинг"
+                : "\(actorName) повысил(а) рейтинг: «\(note)»"
         default:
             let text = action?.text?.trimmingCharacters(in: .whitespacesAndNewlines)
             return text?.isEmpty == false ? text : "Системное сообщение"

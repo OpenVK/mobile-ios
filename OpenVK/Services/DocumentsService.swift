@@ -43,7 +43,7 @@ final class DocumentsService: DocumentsServiceProtocol {
     }
 
     func searchDocuments(query: String, searchOwn: Int = 0, offset: Int = 0, count: Int = 30, completion: @escaping (Result<[AppDocument], Error>) -> Void) {
-        var params: [String: String] = [
+        let params: [String: String] = [
             "q": query,
             "search_own": "\(searchOwn)",
             "count": "\(count)",

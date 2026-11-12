@@ -6,11 +6,66 @@
 import Foundation
 import SwiftUI
 
+// The server currently has no conversation archive endpoint. Keep archive
+// membership locally per OpenVK host and authenticated user.
+enum ChatArchiveStore {
+    static let didChange = Notification.Name("openvkChatArchiveDidChange")
+
+    private static var key: String {
+        "openvk.archive.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
+    }
+
+    private static var firstArchiveTipKey: String {
+        "openvk.archive.tip.shown.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
+    }
+
+    private static var pendingArchiveTipKey: String {
+        "openvk.archive.tip.pending.\(AppConfig.currentHost).\(AuthService.shared.currentUser?.uid ?? 0)"
+    }
+
+    static func takePendingFirstArchiveTip() -> Bool {
+        guard UserDefaults.standard.bool(forKey: pendingArchiveTipKey) else { return false }
+        UserDefaults.standard.set(false, forKey: pendingArchiveTipKey)
+        UserDefaults.standard.set(true, forKey: firstArchiveTipKey)
+        return true
+    }
+
+    static func archivedPeerIDs() -> [Int] {
+        UserDefaults.standard.array(forKey: key)?.compactMap { $0 as? Int } ?? []
+    }
+
+    static func contains(_ peerID: Int) -> Bool {
+        archivedPeerIDs().contains(peerID)
+    }
+
+    static func setArchived(_ archived: Bool, peerID: Int) {
+        var ids = Set(archivedPeerIDs())
+        if archived {
+            if !ids.contains(peerID) && !UserDefaults.standard.bool(forKey: firstArchiveTipKey) {
+                UserDefaults.standard.set(true, forKey: pendingArchiveTipKey)
+            }
+            ids.insert(peerID)
+        } else {
+            ids.remove(peerID)
+        }
+        UserDefaults.standard.set(Array(ids), forKey: key)
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
+}
+
 final class MessagesViewModel: ObservableObject {
-    @Published private(set) var conversations: [Conversation] = []
+    @Published private(set) var conversations: [Conversation] = [] {
+        didSet { persistConversations() }
+    }
     @Published private(set) var isLoading = false
     @Published private(set) var isLoadingMore = false
     @Published private(set) var typingUsersByConversation: [Int: [String]] = [:]
+    @Published private(set) var searchResults: [Conversation] = []
+    @Published private(set) var isSearching = false
+    @Published var searchQuery = ""
+    @Published private(set) var archiveRevision = 0
+    @Published private(set) var fetchedArchivedConversations: [Conversation] = []
+    @Published private(set) var isLoadingArchive = false
     @Published var errorMessage: String?
 
     private let service: MessagesServiceProtocol
@@ -20,9 +75,82 @@ final class MessagesViewModel: ObservableObject {
     private var hasMore = true
     private var typingExpirations: [Int: [Int: Date]] = [:]
     private var typingNames: [Int: [Int: String]] = [:]
+    private var searchWorkItem: DispatchWorkItem?
+    private var archiveRequestID = 0
+
+    var displayedConversations: [Conversation] {
+        let all = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? conversations
+            : searchResults
+        return all.filter { !ChatArchiveStore.contains($0.id) }
+    }
+
+    var archivedConversations: [Conversation] {
+        let loaded = conversations.filter { ChatArchiveStore.contains($0.id) }
+        let loadedIDs = Set(loaded.map(\.id))
+        let older = fetchedArchivedConversations.filter {
+            ChatArchiveStore.contains($0.id) && !loadedIDs.contains($0.id)
+        }
+        return (loaded + older).sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    var hasArchivedConversations: Bool {
+        !ChatArchiveStore.archivedPeerIDs().isEmpty
+    }
+
+    func archive(_ conversation: Conversation, archived: Bool) {
+        ChatArchiveStore.setArchived(archived, peerID: conversation.id)
+    }
+
+    func refreshArchive() {
+        archiveRevision &+= 1
+        refreshArchivedConversations()
+    }
+
+    private func refreshArchivedConversations() {
+        archiveRequestID &+= 1
+        let requestID = archiveRequestID
+        let ids = ChatArchiveStore.archivedPeerIDs()
+        guard !ids.isEmpty else {
+            isLoadingArchive = false
+            fetchedArchivedConversations = []
+            return
+        }
+        isLoadingArchive = true
+        service.fetchConversationsByIDs(ids) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, self.archiveRequestID == requestID else { return }
+                self.isLoadingArchive = false
+                switch result {
+                case .success(let page):
+                    self.fetchedArchivedConversations = page.conversations.filter {
+                        ChatArchiveStore.contains($0.id)
+                    }
+                case .failure(let error):
+                    if !MessagesService.isConnectionFailure(error) {
+                        self.errorMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
 
     init(service: MessagesServiceProtocol = MessagesService.shared) {
         self.service = service
+        if let saved = service.cachedConversations() {
+            conversations = saved.conversations
+            totalCount = saved.totalCount
+            currentOffset = conversations.count
+            hasMore = currentOffset < totalCount
+        }
+    }
+
+    private func persistConversations(removing peerID: Int? = nil) {
+        var saved = Dictionary((service.cachedConversations()?.conversations ?? []).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        for conversation in conversations { saved[conversation.id] = conversation }
+        if let peerID { saved.removeValue(forKey: peerID) }
+        let items = saved.values.sorted { $0.updatedAt > $1.updatedAt }
+        service.cacheConversations(ConversationsPage(totalCount: max(totalCount, items.count), conversations: items))
     }
 
     func load() {
@@ -30,10 +158,6 @@ final class MessagesViewModel: ObservableObject {
 
         isLoading = true
         errorMessage = nil
-        currentOffset = 0
-        totalCount = 0
-        hasMore = true
-
         service.fetchConversations(offset: 0, count: pageSize) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -46,16 +170,57 @@ final class MessagesViewModel: ObservableObject {
                     self.currentOffset = page.conversations.count
                     self.hasMore = self.currentOffset < self.totalCount &&
                         !page.conversations.isEmpty
+                    self.refreshArchivedConversations()
                 case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+                    if !MessagesService.isConnectionFailure(error) {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }
     }
 
     func loadMoreIfNeeded(after conversation: Conversation) {
+        guard searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard conversation.id == conversations.last?.id else { return }
         loadMore()
+    }
+
+    func updateSearch(query: String) {
+        searchQuery = query
+        searchWorkItem?.cancel()
+
+        let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            searchResults = []
+            isSearching = false
+            return
+        }
+
+        isSearching = true
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == value else { return }
+            self.service.searchConversations(query: value) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == value else { return }
+                    self.isSearching = false
+                    switch result {
+                    case .success(let page):
+                        self.searchResults = page.conversations.map { result in
+                            self.conversations.first(where: { $0.id == result.id }) ?? result
+                        }
+                    case .failure(let error):
+                        self.searchResults = []
+                        if !MessagesService.isConnectionFailure(error) {
+                            self.errorMessage = error.localizedDescription
+                        }
+                    }
+                }
+            }
+        }
+        searchWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: workItem)
     }
 
     func handleLongPollEvent(_ notification: Notification) {
@@ -180,8 +345,41 @@ final class MessagesViewModel: ObservableObject {
                             lastMessageReadState: item.lastMessageReadState,
                             isChat: item.isChat,
                             isChatMember: item.isChatMember,
-                            chatMemberCount: item.chatMemberCount
+                            chatMemberCount: item.chatMemberCount,
+                            inReadMessageID: item.inReadMessageID,
+                            outReadMessageID: item.outReadMessageID,
+                            inReadConversationMessageID: item.inReadConversationMessageID,
+                            outReadConversationMessageID: item.outReadConversationMessageID,
+                            lastConversationMessageID: item.lastConversationMessageID,
+                            isImportant: item.isImportant,
+                            isUnanswered: item.isUnanswered
                         )
+                    }
+                    self.searchResults = self.searchResults.map { item in
+                        guard item.id == conversation.id else { return item }
+                        var copy = item
+                        copy = Conversation(
+                            id: copy.id,
+                            peer: copy.peer,
+                            lastMessage: copy.lastMessage,
+                            lastMessageAuthorName: copy.lastMessageAuthorName,
+                            lastMessageOutgoing: copy.lastMessageOutgoing,
+                            updatedAt: copy.updatedAt,
+                            unreadCount: 0,
+                            lastMessageId: copy.lastMessageId,
+                            lastMessageReadState: copy.lastMessageReadState,
+                            isChat: copy.isChat,
+                            isChatMember: copy.isChatMember,
+                            chatMemberCount: copy.chatMemberCount,
+                            inReadMessageID: copy.inReadMessageID,
+                            outReadMessageID: copy.outReadMessageID,
+                            inReadConversationMessageID: copy.inReadConversationMessageID,
+                            outReadConversationMessageID: copy.outReadConversationMessageID,
+                            lastConversationMessageID: copy.lastConversationMessageID,
+                            isImportant: copy.isImportant,
+                            isUnanswered: copy.isUnanswered
+                        )
+                        return copy
                     }
                     AuthService.shared.fetchCounters()
                 case .failure(let error):
@@ -191,11 +389,47 @@ final class MessagesViewModel: ObservableObject {
         }
     }
 
+    func toggleImportant(_ conversation: Conversation) {
+        let newValue = !conversation.isImportant
+        service.markConversationImportant(peerID: conversation.id, important: newValue) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.updateConversationImportance(id: conversation.id, important: newValue)
+                case .failure(let error):
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func updateConversationImportance(id: Int, important: Bool) {
+        func updated(_ items: [Conversation]) -> [Conversation] {
+            items.map { item in
+                guard item.id == id else { return item }
+                var copy = item
+                copy.isImportant = important
+                return copy
+            }
+        }
+        conversations = updated(conversations)
+        searchResults = updated(searchResults)
+    }
+
     func updateUnreadCount(_ notification: Notification) {
         guard let peerID = notification.userInfo?["peerID"] as? Int,
-              let unreadCount = notification.userInfo?["unreadCount"] as? Int,
-              let index = conversations.firstIndex(where: { $0.id == peerID }) else { return }
-        conversations[index].unreadCount = max(0, unreadCount)
+              let unreadCount = notification.userInfo?["unreadCount"] as? Int else { return }
+        let value = max(0, unreadCount)
+        if let index = conversations.firstIndex(where: { $0.id == peerID }) {
+            conversations[index].unreadCount = value
+        }
+        if let index = searchResults.firstIndex(where: { $0.id == peerID }) {
+            searchResults[index].unreadCount = value
+        }
+        if let index = fetchedArchivedConversations.firstIndex(where: { $0.id == peerID }) {
+            fetchedArchivedConversations[index].unreadCount = value
+        }
     }
 
     func deleteConversation(_ conversation: Conversation) {
@@ -245,9 +479,11 @@ final class MessagesViewModel: ObservableObject {
     private func removeConversationLocally(_ conversation: Conversation) {
         let oldCount = conversations.count
         conversations.removeAll { $0.id == conversation.id }
+        searchResults.removeAll { $0.id == conversation.id }
         if conversations.count != oldCount {
             totalCount = max(0, totalCount - 1)
         }
+        persistConversations(removing: conversation.id)
     }
 
     private func loadMore() {
@@ -270,7 +506,9 @@ final class MessagesViewModel: ObservableObject {
                     self.hasMore = self.currentOffset < self.totalCount &&
                         !page.conversations.isEmpty
                 case .failure(let error):
-                    self.errorMessage = error.localizedDescription
+                    if !MessagesService.isConnectionFailure(error) {
+                        self.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }

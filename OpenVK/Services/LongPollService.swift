@@ -3,7 +3,9 @@
 //  OpenVK for iOS
 //
 
+import Combine
 import Foundation
+import Network
 import UIKit
 
 extension Notification.Name {
@@ -38,9 +40,33 @@ private struct LongPollServerResponse: Decodable {
     }
 }
 
-final class LongPollService {
+enum LongPollConnectionState: Equatable {
+    case stopped
+    case connecting
+    case connected
+    case offline
+
+    var title: String {
+        switch self {
+        case .connected: return "Сообщения"
+        case .connecting: return "Обновление…"
+        case .offline, .stopped: return "Подключение…"
+        }
+    }
+
+    var chatSubtitle: String? {
+        self == .connected ? nil : title
+    }
+}
+
+final class LongPollService: ObservableObject {
     static let shared = LongPollService()
 
+    @Published private(set) var connectionState: LongPollConnectionState = .stopped
+    @Published private(set) var hasNetworkConnection = true
+
+    private let pathMonitor = NWPathMonitor()
+    private var runID = UUID()
     private let session: URLSession
     private var task: Task<Void, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -51,21 +77,37 @@ final class LongPollService {
         configuration.timeoutIntervalForRequest = 45
         configuration.timeoutIntervalForResource = 60
         session = URLSession(configuration: configuration)
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            self.hasNetworkConnection = path.status == .satisfied
+            guard self.isRunning else { return }
+            if !self.hasNetworkConnection {
+                self.connectionState = .offline
+            } else if self.connectionState == .offline {
+                self.connectionState = .connecting
+            }
+        }
+        pathMonitor.start(queue: .main)
     }
 
     func start() {
         guard AuthService.shared.isAuthenticated, task == nil else { return }
         isRunning = true
+        runID = UUID()
+        let currentRunID = runID
+        connectionState = hasNetworkConnection ? .connecting : .offline
         #if DEBUG
         print("[LongPoll] starting")
         #endif
         task = Task { [weak self] in
-            await self?.listenLoop()
+            await self?.listenLoop(runID: currentRunID)
         }
     }
 
     func stop() {
         isRunning = false
+        runID = UUID()
+        connectionState = .stopped
         task?.cancel()
         task = nil
         endBackgroundTask()
@@ -85,26 +127,51 @@ final class LongPollService {
         }
     }
 
-    private func listenLoop() async {
-        defer { task = nil }
+    func recordConnectionFailure() {
+        updateConnectionState(.offline, runID: runID)
+    }
+
+    private func updateConnectionState(_ state: LongPollConnectionState, runID: UUID) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isRunning, self.runID == runID else { return }
+            let nextState = self.hasNetworkConnection ? state : .offline
+            if self.connectionState != nextState { self.connectionState = nextState }
+        }
+    }
+
+    @MainActor
+    private func listenLoop(runID: UUID) async {
+        // Keep mutable state on the main actor. Network awaits do not block
+        // the UI; the run ID prevents an old loop clearing a newer task.
+        defer {
+            if self.runID == runID {
+                self.task = nil
+            }
+        }
 
         var server: LongPollServerResponse?
+        var protocolVersion = 3
         while isRunning && !Task.isCancelled && AuthService.shared.isAuthenticated {
             do {
                 if server == nil {
                     server = try await APIClient.shared.call(
                         method: "messages.getLongPollServer",
-                        parameters: ["lp_version": "3", "need_pts": "1"],
+                        parameters: ["lp_version": String(protocolVersion), "need_pts": "1"],
                         httpMethod: "GET",
                         as: LongPollServerResponse.self
                     )
                 }
 
                 guard let currentServer = server else { continue }
-                let result = try await poll(currentServer)
+                let result = try await poll(currentServer, version: protocolVersion)
 
                 if let failed = result.failed {
+                    updateConnectionState(.connecting, runID: runID)
                     if failed == 2 || failed == 3 {
+                        server = nil
+                    } else if failed == 4 {
+                        let advertised = result.maxVersion ?? max(1, protocolVersion - 1)
+                        protocolVersion = max(result.minVersion ?? 1, min(3, advertised))
                         server = nil
                     } else if failed == 1, let nextTS = result.ts {
                         server = LongPollServerResponse(
@@ -118,6 +185,7 @@ final class LongPollService {
                     continue
                 }
 
+                updateConnectionState(.connected, runID: runID)
                 if let nextTS = result.ts {
                     server = LongPollServerResponse(
                         key: currentServer.key,
@@ -133,6 +201,7 @@ final class LongPollService {
                 }
             } catch {
                 guard isRunning, !Task.isCancelled else { break }
+                updateConnectionState(.offline, runID: runID)
                 #if DEBUG
                 print("[LongPoll] error: \(error.localizedDescription). Reconnecting…")
                 #endif
@@ -142,14 +211,14 @@ final class LongPollService {
         }
     }
 
-    private func poll(_ server: LongPollServerResponse) async throws -> LongPollResponse {
+    private func poll(_ server: LongPollServerResponse, version: Int) async throws -> LongPollResponse {
         var components = URLComponents(string: normalizedServerURL(server.server))
         components?.queryItems = [
             URLQueryItem(name: "key", value: server.key),
             URLQueryItem(name: "ts", value: String(server.ts)),
             URLQueryItem(name: "pts", value: server.pts.map(String.init)),
             URLQueryItem(name: "mode", value: "490"),
-            URLQueryItem(name: "version", value: "3")
+            URLQueryItem(name: "version", value: String(version))
         ].filter { $0.value != nil }
 
         guard let url = components?.url else { throw APIError.invalidURL }
@@ -236,17 +305,23 @@ final class LongPollService {
 private struct LongPollResponse: Decodable {
     let failed: Int?
     let ts: Int?
+    let minVersion: Int?
+    let maxVersion: Int?
     let updates: [[LongPollValue]]
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         failed = try? FlexibleInt.decode(from: container, forKey: .failed)
         ts = try? FlexibleInt.decode(from: container, forKey: .ts)
+        minVersion = try? FlexibleInt.decode(from: container, forKey: .minVersion)
+        maxVersion = try? FlexibleInt.decode(from: container, forKey: .maxVersion)
         updates = (try? container.decode([[LongPollValue]].self, forKey: .updates)) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
         case failed, ts, updates
+        case minVersion = "min_version"
+        case maxVersion = "max_version"
     }
 }
 

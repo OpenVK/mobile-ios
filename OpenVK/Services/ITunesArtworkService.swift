@@ -84,28 +84,30 @@ final class ITunesArtworkService {
             return cached
         }
 
-        lock.lock()
-        if let existingTask = activeTasks[cacheKey] {
-            lock.unlock()
-            return await existingTask.value
+        // NSLock.lock/unlock are unavailable directly in async contexts in
+        // Swift 6. Keep the entire active-task lookup/creation synchronous.
+        let task = lock.withLock { () -> Task<String?, Never> in
+            if let existingTask = activeTasks[cacheKey] {
+                return existingTask
+            }
+
+            let task = Task<String?, Never> {
+                let result = await perform()
+
+                let cacheValue = result ?? ""
+                self.memoryCache.setObject(cacheValue as NSString, forKey: cacheKey as NSString)
+                self.userDefaults.set(cacheValue, forKey: self.userDefaultsPrefix + cacheKey)
+
+                self.lock.withLock {
+                    _ = self.activeTasks.removeValue(forKey: cacheKey)
+                }
+
+                return result
+            }
+
+            activeTasks[cacheKey] = task
+            return task
         }
-
-        let task = Task<String?, Never> {
-            let result = await perform()
-
-            let cacheValue = result ?? ""
-            self.memoryCache.setObject(cacheValue as NSString, forKey: cacheKey as NSString)
-            self.userDefaults.set(cacheValue, forKey: self.userDefaultsPrefix + cacheKey)
-
-            self.lock.lock()
-            self.activeTasks.removeValue(forKey: cacheKey)
-            self.lock.unlock()
-
-            return result
-        }
-
-        activeTasks[cacheKey] = task
-        lock.unlock()
 
         return await task.value
     }

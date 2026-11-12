@@ -7,6 +7,7 @@ struct SettingsView: View {
     @EnvironmentObject var auth: AuthService
 
     @State private var showLoginSheet = false
+    @AppStorage("openvk.ipad.split_chats") private var splitChats = false
 
     var body: some View {
         NavigationView {
@@ -111,6 +112,9 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text("Настройки")) {
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        Toggle("Показывать список чатов слева в диалогах", isOn: $splitChats)
+                    }
                     NavigationLink(destination: FeedSettingsView()) {
                         SettingsRow(icon: "list.bullet.rectangle", title: "Лента", iconColor: .appAccent)
                     }

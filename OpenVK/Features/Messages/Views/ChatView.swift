@@ -3,6 +3,8 @@ import Lottie
 import Foundation
 import UIKit
 import PhotosUI
+import PencilKit
+import UniformTypeIdentifiers
 
 private struct PendingChatPhoto: Identifiable {
     let id = UUID()
@@ -45,10 +47,11 @@ struct RecentStickerStore {
     }
 }
 
-private struct ChatComposerHeightPreference: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+private struct ChatOverlayHeightPreference: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, height in height })
     }
 }
 
@@ -56,6 +59,7 @@ struct ChatView: View {
     let conversation: Conversation
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel: ChatViewModel
+    @ObservedObject private var longPoll = LongPollService.shared
     @State private var text = ""
     @State private var legacyTextHeight: CGFloat = 36
     @State private var isEmojiPanelPresented = false
@@ -68,8 +72,11 @@ struct ChatView: View {
     @State private var editingMessage: ChatMessage?
     @State private var messageToDelete: ChatMessage?
     @State private var showsPhotoPicker = false
+    @State private var showsAttachmentPicker = false
+    @State private var openDeviceMediaAfterDismissal = false
     @State private var selectedPhotos: [PendingChatPhoto] = []
-    @State private var composerOverlayHeight: CGFloat = 0
+    @State private var selectedRemoteAttachments: [ChatAttachmentChoice] = []
+    @State private var overlayHeights: [String: CGFloat] = [:]
     @FocusState private var isComposerFocused: Bool
     @Binding var selectedMedia: Attachment?
     @Binding var owningPost: Post?
@@ -87,100 +94,50 @@ struct ChatView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            if #available(iOS 26.0, *) {
-                ZStack(alignment: .bottom) {
-                    tableMessageHistory(viewportWidth: geometry.size.width, showsJumpButton: false)
-                        .scrollEdgeEffectStyle(nil, for: [.top, .bottom])
-                        .ignoresSafeArea(.container, edges: [.top, .bottom])
+        chatPresentation
+    }
 
-                    Group {
-                        if viewModel.canSendMessages {
-                            messageComposer(maxHeight: geometry.size.height / 2)
-                                .padding(.horizontal, 12)
-                                .padding(.bottom, 8)
-                        } else {
-                            Text("Вы больше не можете отправлять сообщения")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(.thinMaterial, in: Capsule())
-                                .padding(.bottom, 10)
-                        }
-                    }
-                    .background(GeometryReader { composerGeometry in
-                        Color.clear.preference(key: ChatComposerHeightPreference.self, value: composerGeometry.size.height)
-                    })
-
-                }
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .overlay(alignment: .bottomTrailing) {
-                    if !viewModel.isNearBottom {
-                        jumpToLatestButton
-                            .padding(.trailing, 16)
-                            .padding(.bottom, max(56, composerOverlayHeight) + 12)
-                    }
-                }
-                .onPreferenceChange(ChatComposerHeightPreference.self) { composerOverlayHeight = $0 }
-            } else {
-                tableMessageHistory(viewportWidth: geometry.size.width)
-                    .safeAreaInset(edge: .bottom, spacing: 0) {
-                        if viewModel.canSendMessages {
-                        legacyMessageComposer
-                        } else {
-                            Text("Вы больше не можете отправлять сообщения")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.vertical, 12)
-                        }
-                    }
-            }
-        }
-        .background {
-            ChatWallpaperBackground()
-                .ignoresSafeArea()
-        }
-        .onChange(of: text) { viewModel.sendTyping(for: $0) }
-        .onAppear {
-            AudioPlayerService.shared.isExpanded = false
-            AudioPlayerService.shared.isOverlayHidden = true
-            if let userID = AuthService.shared.currentUser?.uid {
-                recentStickers = RecentStickerStore().load(userID: userID)
-            }
-            if #unavailable(iOS 16.0) {
-                LegacyChatTabBarHider.setTabBarHidden(true)
-            }
-        }
-        .onDisappear {
-            AudioPlayerService.shared.isOverlayHidden = false
-            viewModel.cacheCurrentPosition()
-            if #unavailable(iOS 16.0) {
-                LegacyChatTabBarHider.setTabBarHidden(false)
-            }
-        }
-        .onChange(of: scenePhase) { phase in
-            if phase != .active { viewModel.cacheCurrentPosition() }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .chatNavigationBarBackground()
-        .chatTabBarHidden()
-        .chatTitleToolbar {
-            chatToolbarTitle
-        }
-        .task {
-            viewModel.load()
-            viewModel.startListening()
-        }
-        .background(profileNavigationLink)
-        .background(chatInfoNavigationLink)
-        .background(wallPostNavigationLink)
-        .alert("Не удалось загрузить сообщения", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
+    // Keep the large view's layout, lifecycle, navigation and presentation
+    // modifiers in separate expressions for the Swift 6 type checker.
+    private var chatPresentation: some View {
+        chatNavigation
+        .alert("Ошибка", isPresented: Binding(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
             Button("ОК", role: .cancel) {}
         } message: { Text(viewModel.errorMessage ?? "Попробуйте ещё раз") }
+        .sheet(isPresented: $showsAttachmentPicker, onDismiss: {
+            if openDeviceMediaAfterDismissal {
+                openDeviceMediaAfterDismissal = false
+                showsPhotoPicker = true
+            }
+        }) {
+            ChatAttachmentPickerSheet(
+                remainingSlots: max(0, 10 - selectedPhotos.count - selectedRemoteAttachments.count),
+                onDeviceMedia: {
+                    openDeviceMediaAfterDismissal = true
+                    showsAttachmentPicker = false
+                },
+                onSelect: { choices in
+                    for item in choices where !selectedRemoteAttachments.contains(where: { $0.id == item.id }) {
+                        if selectedPhotos.count + selectedRemoteAttachments.count >= 10 { break }
+                        selectedRemoteAttachments.append(item)
+                    }
+                    showsAttachmentPicker = false
+                },
+                onGraffiti: { graffiti in
+                    if selectedPhotos.count + selectedRemoteAttachments.count < 10 {
+                        selectedPhotos.append(graffiti)
+                    }
+                    showsAttachmentPicker = false
+                }
+            )
+        }
         .sheet(isPresented: $showsPhotoPicker) {
-            ChatPhotoPicker(isPresented: $showsPhotoPicker, selectionLimit: max(1, 10 - selectedPhotos.count)) { photos in
-                selectedPhotos.append(contentsOf: photos.prefix(max(0, 10 - selectedPhotos.count)))
+            ChatPhotoPicker(isPresented: $showsPhotoPicker,
+                            selectionLimit: max(1, 10 - selectedPhotos.count - selectedRemoteAttachments.count),
+                            onUnsupportedVideo: {
+                                viewModel.errorMessage = "Сервер OpenVK пока не предоставляет API загрузки видео. Можно выбрать фотографии или прикрепить видео, уже загруженное в OVK."
+                            }) { photos in
+                selectedPhotos.append(contentsOf: photos.prefix(max(0, 10 - selectedPhotos.count - selectedRemoteAttachments.count)))
             }
         }
         .confirmationDialog("Удалить сообщение?", isPresented: Binding(
@@ -206,25 +163,190 @@ struct ChatView: View {
         }
     }
 
-    private var chatToolbarTitle: some View {
-        Group {
-            if conversation.isChat {
-                Button {
-                    showsChatInfo = true
-                } label: {
-                    chatTitle
+    private var chatNavigation: some View {
+        chatLifecycle
+            .navigationBarTitleDisplayMode(.inline)
+            .chatNavigationBarBackground()
+            .chatTabBarHidden()
+            .chatTitleToolbar {
+                chatToolbarTitle
+            }
+            .task {
+                viewModel.load()
+                viewModel.startListening()
+            }
+            .background(profileNavigationLink)
+            .background(chatInfoNavigationLink)
+            .background(wallPostNavigationLink)
+    }
+
+    private var chatLifecycle: some View {
+        chatLayout
+            .background {
+                ChatWallpaperBackground()
+                    .ignoresSafeArea()
+            }
+            .onChange(of: text) { viewModel.sendTyping(for: $0) }
+            .onAppear {
+                AudioPlayerService.shared.isExpanded = false
+                AudioPlayerService.shared.isOverlayHidden = true
+                if let userID = AuthService.shared.currentUser?.uid {
+                    recentStickers = RecentStickerStore().load(userID: userID)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Информация о беседе")
+                if #unavailable(iOS 16.0) {
+                    LegacyChatTabBarHider.setTabBarHidden(true)
+                }
+            }
+            .onDisappear {
+                AudioPlayerService.shared.isOverlayHidden = false
+                viewModel.cacheCurrentPosition()
+                if #unavailable(iOS 16.0) {
+                    LegacyChatTabBarHider.setTabBarHidden(false)
+                }
+            }
+            .onChange(of: longPoll.connectionState) { state in
+                if state == .connected { viewModel.refreshAfterReconnect() }
+            }
+            .onChange(of: scenePhase) { phase in
+                if phase != .active { viewModel.cacheCurrentPosition() }
+            }
+    }
+
+    private var chatLayout: some View {
+        GeometryReader { geometry in
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                modernChatLayout(geometry)
             } else {
-                Button {
-                    profileToShow = conversation.peer
-                } label: {
-                    chatTitle
+                legacyChatLayout(width: geometry.size.width)
+            }
+            #else
+            legacyChatLayout(width: geometry.size.width)
+            #endif
+        }
+    }
+
+    private func legacyChatLayout(width: CGFloat) -> some View {
+        tableMessageHistory(viewportWidth: width)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                pinnedMessageBanner
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if viewModel.canSendMessages {
+                    legacyMessageComposer
+                } else {
+                    Text("Вы больше не можете отправлять сообщения")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 12)
                 }
-                .buttonStyle(.plain)
+            }
+    }
+
+    #if compiler(>=6.2)
+    @available(iOS 26.0, *)
+    private func modernChatLayout(_ geometry: GeometryProxy) -> some View {
+        ZStack(alignment: .bottom) {
+            tableMessageHistory(
+                viewportWidth: geometry.size.width,
+                showsJumpButton: false,
+                topInset: geometry.safeAreaInsets.top + (overlayHeights["pin"] ?? 0) + 10,
+                bottomInset: min(geometry.safeAreaInsets.bottom, UIApplication.shared.firstKeyWindow?.safeAreaInsets.bottom ?? 0) + (overlayHeights["composer"] ?? 60) + 8
+            )
+            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            .ignoresSafeArea(.container, edges: [.top, .bottom])
+
+            Group {
+                if viewModel.canSendMessages {
+                    messageComposer(maxHeight: geometry.size.height / 2)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                } else {
+                    Text("Вы больше не можете отправлять сообщения")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                        .glassEffect(.regular, in: Capsule())
+                        .padding(.bottom, 8)
+                }
+            }
+            .background {
+                GeometryReader { composer in
+                    Color.clear.preference(key: ChatOverlayHeightPreference.self,
+                                           value: ["composer": composer.size.height])
+                }
             }
         }
+        .frame(width: geometry.size.width, height: geometry.size.height)
+        .overlay(alignment: .top) {
+            pinnedMessageBanner
+                .background {
+                    GeometryReader { banner in
+                        Color.clear.preference(key: ChatOverlayHeightPreference.self,
+                                               value: ["pin": banner.size.height])
+                    }
+                }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if !viewModel.isNearBottom {
+                jumpToLatestButton
+                    .padding(.trailing, 16)
+                    .padding(.bottom, (overlayHeights["composer"] ?? 60) + 12)
+            }
+        }
+        .onPreferenceChange(ChatOverlayHeightPreference.self) { overlayHeights = $0 }
+    }
+
+    #endif
+
+    @ViewBuilder
+    private var pinnedMessageBanner: some View {
+        if conversation.isChat, let pinned = viewModel.pinnedMessage {
+            Button {
+                viewModel.scrollTo(messageID: pinned.id)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.appAccent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                            Text(pinned.senderName ?? "Закреплённое сообщение")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(pinned.date, style: .date)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(pinned.text.isEmpty ? "Вложение" : pinned.text)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .foregroundStyle(.primary)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .chatPinnedBannerSurface()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Перейти к закреплённому сообщению")
+        }
+    }
+
+    private var chatToolbarTitle: some View {
+        Button {
+            dismissChatKeyboard()
+            showsChatInfo = true
+        } label: {
+            chatTitle
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(conversation.isChat ? "Информация о беседе" : "Информация о переписке")
         .chatToolbarCapsule(animationToken: toolbarCapsuleAnimationToken)
     }
 
@@ -237,29 +359,67 @@ struct ChatView: View {
                 isChat: conversation.isChat
             )
             VStack(alignment: .leading, spacing: 1) {
-                Text(conversation.peer.displayName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .lineLimit(1)
-                if let typing = viewModel.typingText {
+                HStack(spacing: 4) {
+                    Text(conversation.peer.displayName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                    if !conversation.isChat {
+                        if conversation.peer.isOfficial == true {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color.appAccent)
+                                .accessibilityLabel("Подтверждённый аккаунт")
+                        }
+                        SupporterBadgeView(screenName: conversation.peer.username, size: 14)
+                    }
+                }
+                if let status = longPoll.connectionState.chatSubtitle {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let typing = viewModel.typingText {
                     TypingStatusView(text: typing)
                 } else if conversation.isChat, let count = conversation.chatMemberCount {
                     Text("\(count) \(memberCountWord(count))")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else if let presence = viewModel.peerPresenceText {
-                    Text(presence)
-                        .font(.caption2)
-                        .foregroundStyle(viewModel.isPeerOnline ? Color.appAccent : .secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(presence)
+                            .lineLimit(1)
+                        if let symbol = onlineDeviceSymbol {
+                            Image(systemName: symbol)
+                                .accessibilityLabel("Устройство: \(conversation.peer.onlinePlatform ?? "неизвестно")")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(viewModel.isPeerOnline ? Color.appAccent : .secondary)
                 }
             }
         }
         .contentShape(Rectangle())
     }
 
+    private var onlineDeviceSymbol: String? {
+        guard viewModel.isPeerOnline, !conversation.isChat,
+              let platform = conversation.peer.onlinePlatform?.lowercased() else { return nil }
+        if platform.contains("android") { return "rectangle.portrait" }
+        if platform.contains("ipad") || platform.contains("tablet") { return "ipad" }
+        if platform.contains("iphone") || platform.contains("ios") || platform.contains("mobile") {
+            return "iphone"
+        }
+        if platform.contains("mac") || platform.contains("laptop") { return "laptopcomputer" }
+        if platform.contains("web") || platform.contains("desktop") || platform.contains("windows")
+            || platform.contains("linux") { return "desktopcomputer" }
+        return "cpu"
+    }
+
     private var toolbarCapsuleAnimationToken: String {
         let subtitle: String
-        if let typing = viewModel.typingText {
+        if let status = longPoll.connectionState.chatSubtitle {
+            subtitle = status
+        } else if let typing = viewModel.typingText {
             subtitle = typing
         } else if conversation.isChat, let count = conversation.chatMemberCount {
             subtitle = "\(count) \(memberCountWord(count))"
@@ -278,14 +438,16 @@ struct ChatView: View {
         return "участников"
     }
 
-    private func tableMessageHistory(viewportWidth: CGFloat, showsJumpButton: Bool = true) -> some View {
+    private func tableMessageHistory(viewportWidth: CGFloat, showsJumpButton: Bool = true, topInset: CGFloat = 10, bottomInset: CGFloat = 10) -> some View {
         ChatTableHistory(
             messages: viewModel.messages,
-            stickerPickerPresented: isEmojiPanelPresented,
-            bottomOverlayHeight: {
-                if #available(iOS 26.0, *) { return composerOverlayHeight }
-                return 0
-            }(),
+            topInset: topInset,
+            bottomInset: bottomInset,
+            showsGroupAvatars: conversation.isChat,
+            onSenderTap: { user in
+                dismissChatKeyboard()
+                profileToShow = user
+            },
             pageSize: viewModel.pageSize,
             scrollRequest: viewModel.scrollRequest,
             scrollRequestID: viewModel.scrollRequestID,
@@ -302,7 +464,7 @@ struct ChatView: View {
                         onPhotoTap: { openPhotoViewer(for: $0) },
                         onVideoTap: { selectedVideo = $0 },
                         onWallTap: { selectedWallPost = $0 },
-                        onProfileTap: { profileToShow = $0 },
+                        onProfileTap: { dismissChatKeyboard(); profileToShow = $0 },
                         onMentionTap: { openProfile(forMention: $0) },
                         onReply: { message in
                             replyToMessage = message
@@ -316,6 +478,9 @@ struct ChatView: View {
                             text = message.text
                             isComposerFocused = true
                         },
+                        onTogglePin: { viewModel.togglePin(message: $0) },
+                        onToggleImportant: { viewModel.toggleImportant(message: $0) },
+                        onRestore: { viewModel.restore(message: $0) },
                         onDelete: { messageToDelete = $0 }
                     )
                     .id(message.id)
@@ -323,8 +488,8 @@ struct ChatView: View {
                     .padding(.vertical, 1)
                 )
             },
-            onVisible: { id, lastID, nearBottom in
-                viewModel.rememberPosition(messageID: id)
+            onVisible: { firstID, lastID, nearBottom in
+                viewModel.rememberPosition(messageID: firstID)
                 viewModel.updateIsNearBottom(nearBottom)
                 viewModel.markVisibleMessagesAsRead(through: lastID)
             },
@@ -335,6 +500,20 @@ struct ChatView: View {
             onScrollCompleted: { viewModel.completeScroll(requestID: $0) },
             onTapBackground: dismissChatKeyboard
         )
+        .overlay {
+            if viewModel.messages.isEmpty, !viewModel.isLoading,
+               longPoll.connectionState == .offline {
+                VStack(spacing: 8) {
+                    Text("Нет сохранённых сообщений").font(.headline)
+                    Text("Откройте эту переписку с интернетом, чтобы читать её офлайн.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(24)
+                .allowsHitTesting(false)
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             if showsJumpButton && !viewModel.isNearBottom {
                 jumpToLatestButton
@@ -361,7 +540,7 @@ struct ChatView: View {
                         .offset(x: 7, y: -7)
                 }
             }
-            .frame(width: 52, height: 52)
+            .frame(width: 44, height: 44)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -392,7 +571,7 @@ struct ChatView: View {
 
     private var chatInfoNavigationLink: some View {
         NavigationLink(
-            destination: ChatInfoView(conversation: conversation),
+            destination: ChatInfoView(conversation: conversation, selectedMedia: $selectedMedia, owningPost: $owningPost),
             isActive: $showsChatInfo
         ) {
             EmptyView()
@@ -437,6 +616,11 @@ struct ChatView: View {
             && message.isOutgoing == neighbor.isOutgoing
     }
 
+    private var composerControlHeight: CGFloat {
+        UIFont.preferredFont(forTextStyle: .body).lineHeight + 20
+    }
+
+    #if compiler(>=6.2)
     @available(iOS 26.0, *)
     private func messageComposer(maxHeight: CGFloat) -> some View {
         let maximumLines = max(1, Int((maxHeight - 20) / 22))
@@ -452,7 +636,7 @@ struct ChatView: View {
                     self.replyToMessage = nil
                 }
             }
-            if !selectedPhotos.isEmpty {
+            if !selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty {
                 selectedPhotoPreview
             }
             composerControls(maximumLines: maximumLines)
@@ -478,15 +662,15 @@ struct ChatView: View {
     @available(iOS 26.0, *)
     private func composerControls(maximumLines: Int) -> some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button { openPhotoPicker() } label: {
+            Button { openAttachmentPicker() } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 25, height: 25)
+                    .frame(width: composerControlHeight, height: composerControlHeight)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
+            .chatJumpButtonGlass()
             .accessibilityLabel("Добавить вложение")
-            .disabled(selectedPhotos.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
+            .disabled(selectedPhotos.count + selectedRemoteAttachments.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
 
             TextField("Сообщение", text: $text, axis: .vertical)
                 .font(.body)
@@ -497,7 +681,6 @@ struct ChatView: View {
                 .padding(.trailing, 48)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .overlay(alignment: .trailing) {
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
@@ -515,6 +698,7 @@ struct ChatView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Эмодзи")
                 }
+                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             if viewModel.isSendingPhotos {
                 ProgressView()
@@ -542,12 +726,14 @@ struct ChatView: View {
         }
     }
 
+    #endif
+
     private var hasMessageText: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var hasSendableContent: Bool {
-        hasMessageText || (!selectedPhotos.isEmpty && editingMessage == nil)
+        hasMessageText || ((!selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty) && editingMessage == nil)
     }
 
     private var legacyMessageComposer: some View {
@@ -567,18 +753,18 @@ struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
-            if !selectedPhotos.isEmpty {
+            if !selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty {
                 selectedPhotoPreview
             }
             HStack(spacing: 4) {
-                Button(action: openPhotoPicker) {
+                Button(action: openAttachmentPicker) {
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 28))
                         .foregroundColor(.appAccent)
                 }
-                .disabled(selectedPhotos.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
+                .disabled(selectedPhotos.count + selectedRemoteAttachments.count >= 10 || viewModel.isSendingPhotos || editingMessage != nil)
                 .padding(.leading, 5)
-                .accessibilityLabel("Добавить фотографии")
+                .accessibilityLabel("Добавить вложение")
 
                 legacyMessageInput
 
@@ -700,6 +886,40 @@ struct ChatView: View {
                             }
                         }
                 }
+                ForEach(selectedRemoteAttachments) { item in
+                    ZStack(alignment: .topTrailing) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(.tertiarySystemBackground))
+                    VStack(spacing: 4) {
+                        if let url = item.thumbnailURL {
+                            CachedRemoteImage(url: url, contentMode: .fill) {
+                                Image(systemName: item.icon)
+                            }
+                            .frame(width: 64, height: 43)
+                            .clipped()
+                        } else {
+                            Image(systemName: item.icon)
+                                .font(.system(size: 24))
+                                .frame(height: 43)
+                        }
+                        Text(item.title)
+                            .font(.system(size: 9))
+                            .lineLimit(1)
+                            .padding(.horizontal, 2)
+                    }
+                    .frame(width: 64, height: 64)
+                    if !viewModel.isSendingPhotos {
+                        Button {
+                            selectedRemoteAttachments.removeAll { $0.id == item.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.white, .black.opacity(0.7))
+                        }
+                        .offset(x: 5, y: -5)
+                    }
+                }
+                    .frame(width: 64, height: 64)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.top, 10)
@@ -708,11 +928,12 @@ struct ChatView: View {
         .frame(height: 82)
     }
 
-    private func openPhotoPicker() {
-        guard selectedPhotos.count < 10, !viewModel.isSendingPhotos else { return }
+    private func openAttachmentPicker() {
+        guard selectedPhotos.count + selectedRemoteAttachments.count < 10, !viewModel.isSendingPhotos,
+              editingMessage == nil else { return }
         dismissChatKeyboard()
         isEmojiPanelPresented = false
-        showsPhotoPicker = true
+        showsAttachmentPicker = true
     }
 
     private func sendComposedMessage() {
@@ -724,11 +945,14 @@ struct ChatView: View {
             self.editingMessage = nil
             text = ""
             legacyTextHeight = 36
-        } else if !selectedPhotos.isEmpty {
+        } else if !selectedPhotos.isEmpty || !selectedRemoteAttachments.isEmpty {
             let photos = selectedPhotos.map(\.data)
-            viewModel.sendPhotos(text: value, photos: photos, replyTo: replyToMessage?.id) { success in
+            let identifiers = selectedRemoteAttachments.map(\.token)
+            viewModel.sendAttachments(text: value, photos: photos, attachments: identifiers,
+                                      replyTo: replyToMessage?.id) { success in
                 guard success else { return }
                 selectedPhotos.removeAll()
+                selectedRemoteAttachments.removeAll()
                 text = ""
                 replyToMessage = nil
                 legacyTextHeight = 36
@@ -743,6 +967,7 @@ struct ChatView: View {
 
     @ViewBuilder
     private func messageActionBanner(title: String, subtitle: String, cancel: @escaping () -> Void) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             messageActionBannerContent(title: title, subtitle: subtitle, cancel: cancel)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -750,6 +975,10 @@ struct ChatView: View {
             messageActionBannerContent(title: title, subtitle: subtitle, cancel: cancel)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        #else
+        messageActionBannerContent(title: title, subtitle: subtitle, cancel: cancel)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        #endif
     }
 
     private func messageActionBannerContent(title: String, subtitle: String, cancel: @escaping () -> Void) -> some View {
@@ -798,6 +1027,7 @@ struct ChatView: View {
     }
 
     private func openProfile(forMention username: String) {
+        dismissChatKeyboard()
         ProfileService.shared.fetchProfile(username: username) { result in
             if case .success(let user) = result {
                 profileToShow = user
@@ -807,10 +1037,35 @@ struct ChatView: View {
 
 }
 
+private final class ChatHistoryTableView: UITableView {
+    var onLayout: (() -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?()
+    }
+
+    override var bounds: CGRect {
+        didSet {
+            guard abs(oldValue.height - bounds.height) > 0.5, oldValue.height > 0 else { return }
+            let oldBottom = max(-adjustedContentInset.top,
+                                contentSize.height - oldValue.height + adjustedContentInset.bottom)
+            guard oldBottom - contentOffset.y < 80 else { return }
+            let bottom = max(-adjustedContentInset.top,
+                             contentSize.height - bounds.height + adjustedContentInset.bottom)
+            if abs(contentOffset.y - bottom) > 0.5 {
+                contentOffset.y = bottom
+            }
+        }
+    }
+}
+
 private struct ChatTableHistory: UIViewRepresentable {
     let messages: [ChatMessage]
-    let stickerPickerPresented: Bool
-    let bottomOverlayHeight: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let showsGroupAvatars: Bool
+    let onSenderTap: (User) -> Void
     let pageSize: Int
     let scrollRequest: ChatScrollRequest
     let scrollRequestID: Int
@@ -826,7 +1081,7 @@ private struct ChatTableHistory: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeUIView(context: Context) -> UITableView {
-        let table = UITableView(frame: .zero, style: .plain)
+        let table = ChatHistoryTableView(frame: .zero, style: .plain)
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
         table.register(ChatMessageTableCell.self, forCellReuseIdentifier: ChatMessageTableCell.reuseID)
@@ -837,16 +1092,25 @@ private struct ChatTableHistory: UIViewRepresentable {
         table.estimatedRowHeight = 56
         table.contentInset = UIEdgeInsets(top: 10, left: 0, bottom: 10, right: 0)
         table.contentInsetAdjustmentBehavior = .never
+        table.scrollsToTop = false
         table.keyboardDismissMode = .interactive
         table.tableFooterView = UIView(frame: .zero)
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
-            table.topEdgeEffect.isHidden = true
-            table.bottomEdgeEffect.isHidden = true
+            table.topEdgeEffect.isHidden = false
+            table.bottomEdgeEffect.isHidden = false
+            table.topEdgeEffect.style = .soft
+            table.bottomEdgeEffect.style = .soft
         }
+        #endif
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.didTapBackground))
         tap.cancelsTouchesInView = false
         table.addGestureRecognizer(tap)
         context.coordinator.tableView = table
+        table.onLayout = { [weak coordinator = context.coordinator, weak table] in
+            guard let table else { return }
+            coordinator?.updateSenderAvatars(in: table)
+        }
         return table
     }
 
@@ -865,8 +1129,8 @@ private struct ChatTableHistory: UIViewRepresentable {
         private var scrollSequence = 0
         private var suppressScrollCallbacks = false
         private var pendingVisibleReport = false
-        private var wasStickerPickerPresented = false
         private var measuredHeights: [Int: CGFloat] = [:]
+        private var senderAvatars: [Int: UIHostingController<AnyView>] = [:]
         private let loadGate = ChatPageLoadGate()
 
         init(parent: ChatTableHistory) { self.parent = parent }
@@ -914,19 +1178,12 @@ private struct ChatTableHistory: UIViewRepresentable {
 
         func apply(to table: UITableView) {
             suppressScrollCallbacks = true
-            let pickerJustOpened = parent.stickerPickerPresented && !wasStickerPickerPresented
-            wasStickerPickerPresented = parent.stickerPickerPresented
-            let safeArea = table.window?.safeAreaInsets ?? UIApplication.shared.firstKeyWindow?.safeAreaInsets ?? .zero
-            let desiredTopInset: CGFloat
-            let desiredBottomInset: CGFloat
-            if #available(iOS 26.0, *) {
-                let navigationBarHeight = table.chatParentController()?.navigationController?.navigationBar.bounds.height ?? 56
-                desiredTopInset = 10 + safeArea.top + navigationBarHeight
-                desiredBottomInset = 20 + safeArea.bottom + max(56, parent.bottomOverlayHeight)
-            } else {
-                desiredTopInset = 10
-                desiredBottomInset = 10 + parent.bottomOverlayHeight
-            }
+            let oldBottom = max(-table.adjustedContentInset.top,
+                                table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
+            let wasNearBottom = oldBottom - table.contentOffset.y < 80
+            let bottomInsetChanged = abs(table.contentInset.bottom - parent.bottomInset) > 0.5
+            let desiredTopInset = parent.topInset
+            let desiredBottomInset = parent.bottomInset
             if abs(table.contentInset.top - desiredTopInset) > 0.5 {
                 table.contentInset.top = desiredTopInset
                 table.verticalScrollIndicatorInsets.top = desiredTopInset
@@ -994,22 +1251,85 @@ private struct ChatTableHistory: UIViewRepresentable {
                 }
             }
             lastWidth = table.bounds.width
+            if bottomInsetChanged && wasNearBottom && !displayedMessages.isEmpty {
+                table.layoutIfNeeded()
+                let bottom = max(-table.adjustedContentInset.top,
+                                 table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
+                table.setContentOffset(CGPoint(x: table.contentOffset.x, y: bottom), animated: false)
+            }
             handleScrollRequest(in: table)
             lastUserOffsetY = table.contentOffset.y
             suppressScrollCallbacks = false
             reportVisiblePosition(in: table)
-            if pickerJustOpened {
-                // Wait for the composer to finish resizing before revealing the
-                // latest message above the sticker picker.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self, weak table] in
-                    guard let self, let table, self.parent.stickerPickerPresented,
-                          !self.displayedMessages.isEmpty else { return }
-                    table.layoutIfNeeded()
-                    let bottom = max(-table.adjustedContentInset.top,
-                                     table.contentSize.height - table.bounds.height + table.adjustedContentInset.bottom)
-                    table.setContentOffset(CGPoint(x: table.contentOffset.x, y: bottom), animated: false)
+            updateSenderAvatars(in: table)
+        }
+
+        func updateSenderAvatars(in table: UITableView) {
+            guard !suppressScrollCallbacks else { return }
+            // Keep avatars alive under the translucent toolbar until their
+            // group has actually scrolled beyond the table's bounds.
+            let visibleTop = table.contentOffset.y
+            let visibleBottom = table.contentOffset.y + table.bounds.height - table.adjustedContentInset.bottom
+            var activeIDs = Set<Int>()
+            if parent.showsGroupAvatars, visibleBottom > visibleTop {
+                let rows = (table.indexPathsForVisibleRows ?? []).map(\.row).sorted()
+                var handledSenders = Set<Int>()
+                for row in rows where displayedMessages.indices.contains(row) {
+                    let message = displayedMessages[row]
+                    guard !message.isOutgoing, message.systemEventText == nil else { continue }
+                    var start = row
+                    var end = row
+                    while start > 0 && belongsToSenderGroup(displayedMessages[start - 1], message) { start -= 1 }
+                    let groupID = displayedMessages[start].id
+                    guard handledSenders.insert(groupID).inserted else { continue }
+                    while end + 1 < displayedMessages.count && belongsToSenderGroup(displayedMessages[end + 1], message) { end += 1 }
+                    let top = table.rectForRow(at: IndexPath(row: start, section: 0)).minY
+                    let bottom = table.rectForRow(at: IndexPath(row: end, section: 0)).maxY
+                    guard bottom > visibleTop, top < visibleBottom else { continue }
+                    activeIDs.insert(groupID)
+                    let host: UIHostingController<AnyView>
+                    if let existing = senderAvatars[groupID] {
+                        host = existing
+                    } else {
+                        let user = User(
+                            uid: message.senderID,
+                            username: message.senderID < 0 ? "club\(abs(message.senderID))" : "id\(message.senderID)",
+                            displayName: message.senderName ?? "",
+                            avatarURL: message.senderAvatarURL,
+                            isGroup: message.senderID < 0
+                        )
+                        host = UIHostingController(rootView: AnyView(
+                            Button { [weak self] in self?.parent.onSenderTap(user) } label: {
+                                Avatar(user: user, size: 38)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(user.displayName)
+                        ))
+                        host.view.backgroundColor = .clear
+                        if #available(iOS 16.4, *) { host.safeAreaRegions = [] }
+                        if let controller = table.chatParentController() {
+                            controller.addChild(host)
+                            table.addSubview(host.view)
+                            host.didMove(toParent: controller)
+                        } else {
+                            table.addSubview(host.view)
+                        }
+                        senderAvatars[groupID] = host
+                    }
+                    host.view.frame = CGRect(x: 12, y: max(top, min(bottom - 38, visibleBottom - 38)), width: 38, height: 38)
+                    table.bringSubviewToFront(host.view)
                 }
             }
+            for id in Array(senderAvatars.keys) where !activeIDs.contains(id) {
+                guard let host = senderAvatars.removeValue(forKey: id) else { continue }
+                host.willMove(toParent: nil)
+                host.view.removeFromSuperview()
+                host.removeFromParent()
+            }
+        }
+
+        private func belongsToSenderGroup(_ candidate: ChatMessage, _ message: ChatMessage) -> Bool {
+            candidate.systemEventText == nil && !candidate.isOutgoing && candidate.senderID == message.senderID
         }
 
         private func refreshVisibleCells(in table: UITableView) {
@@ -1079,6 +1399,7 @@ private struct ChatTableHistory: UIViewRepresentable {
             guard !suppressScrollCallbacks,
                   let table = tableView,
                   !displayedMessages.isEmpty else { return }
+            updateSenderAvatars(in: table)
             reportVisiblePosition(in: table)
             let currentY = scrollView.contentOffset.y
             let movement = currentY - lastUserOffsetY
@@ -1415,6 +1736,7 @@ private struct StickerPickerArtwork: View {
 
 extension View {
     @ViewBuilder func chatTitleToolbar<Title: View>(@ViewBuilder title: @escaping () -> Title) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self.toolbar {
                 ToolbarItem(placement: .principal) { title() }
@@ -1425,9 +1747,15 @@ extension View {
                 ToolbarItem(placement: .principal) { title() }
             }
         }
+        #else
+        self.toolbar {
+            ToolbarItem(placement: .principal) { title() }
+        }
+        #endif
     }
 
     @ViewBuilder func chatStickerPickerSurface() -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -1437,31 +1765,68 @@ extension View {
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        #else
+        self
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        #endif
+    }
+
+    @ViewBuilder func chatPinnedBannerSurface() -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            self
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+        } else {
+            self.background(Color(.secondarySystemBackground))
+        }
+        #else
+        self.background(Color(.secondarySystemBackground))
+        #endif
     }
 
     @ViewBuilder func chatJumpButtonGlass() -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
-            self.glassEffect(.regular, in: Circle())
+            self.glassEffect(.regular.interactive(), in: Circle())
         } else {
             self.background(.thinMaterial, in: Circle())
         }
+        #else
+        self.background(.thinMaterial, in: Circle())
+        #endif
     }
 
     @ViewBuilder func chatToolbarCapsule(animationToken: String) -> some View {
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             self
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .glassEffect(.regular, in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
                 .animation(.spring(response: 0.32, dampingFraction: 0.8), value: animationToken)
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 
     @ViewBuilder func chatNavigationBarBackground() -> some View {
-        if #available(iOS 26.0, *) {
-            self.toolbarBackgroundVisibility(.visible, for: .navigationBar)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            if #available(iOS 16.0, *) {
+                // The split-chat navbar must stay opaque; hiding the toolbar
+                // background exposed the chat wallpaper in some conversations.
+                self.toolbarBackground(Color(.secondarySystemBackground), for: .navigationBar)
+                    .toolbarBackground(.visible, for: .navigationBar)
+            } else {
+                self
+            }
+        } else if #available(iOS 26.0, *) {
+            self.toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         } else if #available(iOS 18.0, *) {
             self.toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         } else if #available(iOS 16.0, *) {
@@ -1608,7 +1973,7 @@ private struct ChatMentionText: View {
 
     var body: some View {
         Text(attributedText)
-            .font(.system(size: 16))
+            .font(.body)
             .fixedSize(horizontal: false, vertical: true)
             .foregroundStyle(isOutgoing ? .white : (isDeleted ? .secondary : .primary))
             .environment(\.openURL, OpenURLAction { url in
@@ -1679,70 +2044,96 @@ private struct MessageBubble: View {
     let onReply: (ChatMessage) -> Void
     let onReplyTap: (ChatReply) -> Void
     let onEdit: (ChatMessage) -> Void
+    let onTogglePin: (ChatMessage) -> Void
+    let onToggleImportant: (ChatMessage) -> Void
+    let onRestore: (ChatMessage) -> Void
     let onDelete: (ChatMessage) -> Void
     @State private var swipeOffset: CGFloat = 0
+    @State private var fetchedPostViews: Int?
 
     var body: some View {
         Group {
             if let systemEventText = message.systemEventText {
                 SystemMessagePlaque(text: systemEventText, date: message.date)
             } else {
-                HStack(alignment: .bottom, spacing: 6) {
-                    if message.isOutgoing { Spacer(minLength: 48) }
+                HStack(alignment: .bottom, spacing: 0) {
+                    if message.isOutgoing { Spacer(minLength: 0) }
                     if !message.isOutgoing && isChat {
-                        if !joinsNext {
-                            Button {
-                                onProfileTap(sender)
-                            } label: {
-                                Avatar(user: sender, size: 26)
-                            }
-                            .buttonStyle(.plain)
-                        } else {
-                            Color.clear.frame(width: 26, height: 26)
-                        }
+                        // Fixed avatar gutter on every incoming chat row:
+                        // 38 pt avatar + 6 pt gap, whether its image is shown
+                        // here or floated over the sender's message group.
+                        Color.clear.frame(width: 44, height: 38)
                     }
                     messageContent
-                    if !message.isOutgoing { Spacer(minLength: 48) }
+                    .contextMenu {
+                        if message.systemEventText == nil {
+                        if !message.text.isEmpty && !message.isDeleted {
+                            Button {
+                                UIPasteboard.general.string = message.text
+                            } label: {
+                                Label("Копировать", systemImage: "doc.on.doc")
+                            }
+                        }
+                        if !message.isDeleted, message.id > 0 {
+                            Button {
+                                onReply(message)
+                            } label: {
+                                Label("Ответить", systemImage: "arrowshape.turn.up.left")
+                            }
+                        }
+                        if message.isOutgoing, !message.isDeleted, message.id > 0, !message.text.isEmpty {
+                            Button {
+                                onEdit(message)
+                            } label: {
+                                Label("Редактировать", systemImage: "pencil")
+                            }
+                        }
+                        if !message.isDeleted, message.id > 0 {
+                            Button {
+                                onTogglePin(message)
+                            } label: {
+                                Label(
+                                    message.isPinned ? "Открепить" : "Закрепить",
+                                    systemImage: message.isPinned ? "pin.slash" : "pin"
+                                )
+                            }
+                            Button {
+                                onToggleImportant(message)
+                            } label: {
+                                Label(
+                                    message.isImportant ? "Убрать из важных" : "Пометить важным",
+                                    systemImage: message.isImportant ? "star.slash" : "star"
+                                )
+                            }
+                            Button(role: .destructive) {
+                                onDelete(message)
+                            } label: {
+                                Label("Удалить", systemImage: "trash")
+                                    .foregroundStyle(.red)
+                            }
+                        } else if message.isDeleted, message.id > 0 {
+                            Button {
+                                onRestore(message)
+                            } label: {
+                                Label("Восстановить", systemImage: "arrow.uturn.backward")
+                            }
+                        }
+                        }
+                    }
+                    if !message.isOutgoing { Spacer(minLength: 0) }
                 }
+                .frame(maxWidth: .infinity,
+                       alignment: message.isOutgoing ? .trailing : .leading)
             }
         }
-        .padding(.top, joinsPrevious ? 0 : 4)
-        .contentShape(Rectangle())
+        // Rich post cards must be separated from preceding messages even
+        // when they are consecutive messages from the same sender.
+        .padding(.top, singleWallAttachment != nil ? 7 : (joinsPrevious ? 0 : 4))
+        // Do not force the entire row to be a context-menu preview shape.
+        // In particular this generated an oversized translucent rectangle
+        // around otherwise transparent stickers on long-press.
         .offset(x: swipeOffset)
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: swipeOffset)
-        .contextMenu {
-            if message.systemEventText == nil {
-            if !message.text.isEmpty && !message.isDeleted {
-                Button {
-                    UIPasteboard.general.string = message.text
-                } label: {
-                    Label("Копировать", systemImage: "doc.on.doc")
-                }
-            }
-            if !message.isDeleted, message.id > 0 {
-                Button {
-                    onReply(message)
-                } label: {
-                    Label("Ответить", systemImage: "arrowshape.turn.up.left")
-                }
-            }
-            if message.isOutgoing, !message.isDeleted, message.id > 0, !message.text.isEmpty {
-                Button {
-                    onEdit(message)
-                } label: {
-                    Label("Редактировать", systemImage: "pencil")
-                }
-            }
-            if !message.isDeleted, message.id > 0 {
-                Button(role: .destructive) {
-                    onDelete(message)
-                } label: {
-                    Label("Удалить", systemImage: "trash")
-                        .foregroundStyle(.red)
-                }
-            }
-            }
-        }
         .highPriorityGesture(
             DragGesture(minimumDistance: 24)
                 .onChanged { value in
@@ -1768,6 +2159,8 @@ private struct MessageBubble: View {
     private var messageContent: some View {
         if let stickerURL = message.stickerURL {
             sticker(url: stickerURL, animationURL: message.stickerAnimationURL)
+        } else if let wall = singleWallAttachment {
+            wallAttachmentBubble(wall)
         } else if usesRichAttachmentBubble {
             richAttachmentBubble
         } else if let video = message.videos.first {
@@ -1788,7 +2181,7 @@ private struct MessageBubble: View {
         let attachments = message.richAttachments ?? []
         if attachments.contains(where: {
             switch $0 {
-            case .audio, .wall, .poll, .link, .sticker, .unsupported: return true
+            case .audio, .wall, .poll, .link, .sticker, .gift, .unsupported: return true
             case .photo, .video, .document: return false
             }
         }) { return true }
@@ -1796,6 +2189,96 @@ private struct MessageBubble: View {
         let allPhotos = attachments.allSatisfy { if case .photo = $0 { return true }; return false }
         let allDocuments = attachments.allSatisfy { if case .document = $0 { return true }; return false }
         return !allPhotos && !allDocuments
+    }
+
+    // A single shared wall post uses the entire bubble width, like media
+    // attachments, instead of inheriting the 13-point inset for mixed content.
+    private var singleWallAttachment: ChatWallPost? {
+        guard (message.forwardedMessages ?? []).isEmpty,
+              let attachments = message.richAttachments,
+              attachments.count == 1,
+              case .wall(let wall) = attachments[0] else {
+            return nil
+        }
+        return wall
+    }
+
+    private func wallAttachmentBubble(_ wall: ChatWallPost) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if isChat, !message.isOutgoing, showsSenderDetails, let senderName = message.senderName {
+                Button { onProfileTap(sender) } label: {
+                    Text(senderName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.appAccent)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 13)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+            }
+
+            if let reply = message.reply {
+                Button { onReplyTap(reply) } label: {
+                    replyPreview(reply, width: photoBubbleWidth - 26)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 13)
+                .padding(.top, 8)
+                .padding(.bottom, 6)
+            }
+
+            if !message.text.isEmpty {
+                messageText
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            ChatRichAttachmentCard(
+                attachment: .wall(wall),
+                mediaWidth: photoBubbleWidth,
+                isOutgoing: message.isOutgoing,
+                onPhotoTap: onPhotoTap,
+                onVideoTap: onVideoTap,
+                onWallTap: onWallTap
+            )
+            .frame(width: photoBubbleWidth, alignment: .leading)
+            .padding(.top, 10)
+
+            HStack(alignment: .center, spacing: 8) {
+                if let count = wall.viewCount ?? fetchedPostViews {
+                    Label(count.formatted(), systemImage: "eye")
+                        .font(.caption2)
+                        .foregroundStyle(message.isOutgoing ? Color.white.opacity(0.75) : Color.secondary)
+                }
+                Spacer(minLength: 0)
+                messageMetadata
+            }
+            .padding(.horizontal, 13)
+            .padding(.top, 8)
+            .padding(.bottom, 9)
+        }
+        .foregroundStyle(message.isOutgoing ? .white : .primary)
+        .frame(width: photoBubbleWidth, alignment: .leading)
+        .background(attachmentBubbleColor)
+        .clipShape(attachmentBubbleShape)
+        .task(id: wall.url) {
+            fetchedPostViews = nil
+            guard wall.viewCount == nil, let reference = wall.postReference else { return }
+            do {
+                let details: ChatWallLookupResponse = try await APIClient.shared.call(
+                    method: "wall.getById",
+                    parameters: [
+                        "posts": "\(reference.ownerID)_\(reference.postID)",
+                        "extended": "1"
+                    ],
+                    as: ChatWallLookupResponse.self
+                )
+                fetchedPostViews = details.items.first?.views?.count
+            } catch {
+                // Instances that omit the counter simply show the message time.
+            }
+        }
     }
 
     private var richAttachmentBubble: some View {
@@ -1867,7 +2350,7 @@ private struct MessageBubble: View {
             }
 
             if !message.text.isEmpty {
-                messageTextAndMetadata
+                messageTextWithMetadata(width: photoBubbleWidth - 26)
             } else {
                 HStack {
                     Spacer()
@@ -1906,7 +2389,6 @@ private struct MessageBubble: View {
         VStack(alignment: .leading, spacing: 3) {
             VStack(spacing: 0) {
                 ChatPhotoCollage(photos: message.photos, width: photoBubbleWidth, onTap: onPhotoTap)
-                    .clipShape(TopRoundedRectangle(radius: 18))
 
                 if !message.text.isEmpty {
                     photoMessageTextAndMetadata
@@ -1918,8 +2400,11 @@ private struct MessageBubble: View {
                 }
             }
             .frame(width: photoBubbleWidth, alignment: .leading)
+            // Use the same Telegram-like silhouette for photo/video content and
+            // its background. Two separate masks caused exposed accent wedges.
+            .background(attachmentBubbleColor)
             .compositingGroup()
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(attachmentBubbleShape)
             .overlay(alignment: .bottomTrailing) {
                 if message.text.isEmpty {
                     imageMetadata
@@ -1927,7 +2412,6 @@ private struct MessageBubble: View {
                 }
             }
         }
-        .background(attachmentBubbleColor, in: attachmentBubbleShape)
     }
 
     private func videoBubble(_ video: ChatVideo) -> some View {
@@ -1972,7 +2456,6 @@ private struct MessageBubble: View {
                     .frame(width: photoBubbleWidth, height: 190)
                 }
                 .buttonStyle(.plain)
-                .clipShape(TopRoundedRectangle(radius: 18))
 
                 if !message.text.isEmpty {
                     photoMessageTextAndMetadata
@@ -1984,8 +2467,11 @@ private struct MessageBubble: View {
                 }
             }
             .frame(width: photoBubbleWidth, alignment: .leading)
+            // Use the same Telegram-like silhouette for photo/video content and
+            // its background. Two separate masks caused exposed accent wedges.
+            .background(attachmentBubbleColor)
             .compositingGroup()
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(attachmentBubbleShape)
             .overlay(alignment: .bottomTrailing) {
                 if message.text.isEmpty {
                     imageMetadata
@@ -1993,7 +2479,6 @@ private struct MessageBubble: View {
                 }
             }
         }
-        .background(attachmentBubbleColor, in: attachmentBubbleShape)
         .accessibilityLabel("Видео: \(video.title)")
     }
 
@@ -2015,11 +2500,13 @@ private struct MessageBubble: View {
 
     private var attachmentBubbleShape: MessageBubbleShape {
         MessageBubbleShape(
+            // iMessage-style grouping keeps both top corners rounded. Only
+            // the lower corner on the sender's side flattens between messages.
             topLeadingRadius: 18,
             topTrailingRadius: 18,
-            bottomLeadingRadius: 18,
-            bottomTrailingRadius: 18,
-            hasTail: !joinsNext && !message.text.isEmpty,
+            bottomLeadingRadius: !message.isOutgoing && joinsNext ? 6 : 18,
+            bottomTrailingRadius: message.isOutgoing && joinsNext ? 6 : 18,
+            hasTail: !joinsNext,
             isOutgoing: message.isOutgoing
         )
     }
@@ -2052,23 +2539,13 @@ private struct MessageBubble: View {
         .foregroundStyle(message.isOutgoing ? .white : .primary)
         .padding(.horizontal, 13)
         .padding(.vertical, 9)
-        .background(
-            message.isOutgoing ? Color.appAccent : Color(.secondarySystemBackground),
-            in: MessageBubbleShape(
-                topLeadingRadius: message.isOutgoing || !joinsPrevious ? 18 : 8,
-                topTrailingRadius: message.isOutgoing && joinsPrevious ? 8 : 18,
-                bottomLeadingRadius: message.isOutgoing || !joinsNext ? 18 : 8,
-                bottomTrailingRadius: message.isOutgoing && joinsNext ? 8 : 18,
-                hasTail: !joinsNext,
-                isOutgoing: message.isOutgoing
-            )
-        )
+        .background(attachmentBubbleColor, in: attachmentBubbleShape)
     }
 
     private var bubbleContentWidth: CGFloat {
         let text = message.isDeleted ? "Сообщение удалено" : message.text
         let textWidth = text.components(separatedBy: .newlines)
-            .map { ($0 as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 16)]).width }
+            .map { ($0 as NSString).size(withAttributes: [.font: UIFont.preferredFont(forTextStyle: .body)]).width }
             .max() ?? 0
         let replyWidth: CGFloat
         if let reply = message.reply {
@@ -2084,7 +2561,7 @@ private struct MessageBubble: View {
     }
 
     private var maximumBubbleContentWidth: CGFloat {
-        let reservedWidth: CGFloat = message.isOutgoing ? 72 : (isChat ? 104 : 72)
+        let reservedWidth: CGFloat = message.isOutgoing ? 72 : (isChat ? 116 : 72)
         return max(0, min(viewportWidth - reservedWidth - 26, 300))
     }
 
@@ -2119,34 +2596,61 @@ private struct MessageBubble: View {
     }
 
     private var photoMessageTextAndMetadata: some View {
-        messageText
-            .padding(.trailing, metadataSlotWidth)
-            .padding(.bottom, 14)
+        messageTextWithMetadata(width: photoBubbleWidth - 26)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottomTrailing) {
-                messageMetadata.frame(width: metadataSlotWidth, alignment: .trailing)
-            }
     }
 
     private var messageTextAndMetadata: some View {
-        messageText
-            .frame(width: messageTextWidth, alignment: .leading)
-            .padding(.trailing, metadataSlotWidth)
-            .padding(.bottom, 14)
-            .overlay(alignment: .bottomTrailing) {
-                messageMetadata.frame(width: metadataSlotWidth, alignment: .trailing)
+        messageTextWithMetadata(width: bubbleContentWidth)
+    }
+
+    // A timestamp may share the line with a short message. For wrapped or
+    // nearly full-width text, use a real trailing row instead of drawing on
+    // top of glyphs (invisible spaces were not a reliable layout reservation).
+    @ViewBuilder
+    private func messageTextWithMetadata(width: CGFloat) -> some View {
+        if metadataFitsOnOneLine(width: width) {
+            HStack(alignment: .lastTextBaseline, spacing: 4) {
+                messageText
+                Spacer(minLength: 0)
+                messageMetadata
             }
+            .frame(width: max(1, width), alignment: .leading)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                messageText
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    messageMetadata
+                }
+            }
+            .frame(width: max(1, width), alignment: .leading)
+        }
     }
 
-    private var messageTextWidth: CGFloat? {
-        guard bubbleContentWidth > metadataSlotWidth else { return nil }
-        return bubbleContentWidth - metadataSlotWidth
+    private func metadataFitsOnOneLine(width: CGFloat) -> Bool {
+        let value = message.isDeleted ? "Сообщение удалено" : message.text
+        guard !value.contains("\n") else { return false }
+        let font = UIFont.preferredFont(forTextStyle: .body)
+        let textWidth = (value as NSString).size(withAttributes: [.font: font]).width
+        return textWidth + metadataSlotWidth + 22 < max(1, width)
     }
 
-    private var metadataSlotWidth: CGFloat { message.isEdited ? 76 : 50 }
+    private var displayTime: String {
+        message.date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private var metadataSlotWidth: CGFloat {
+        let font = UIFont.systemFont(ofSize: 10)
+        let title = (message.isEdited ? "ред. " : "") + displayTime
+        let titleWidth = (title as NSString).size(withAttributes: [.font: font]).width
+        // A read receipt is 18 pt wide; the HStack has 4 pt spacing.
+        let statusWidth: CGFloat = message.deliveryStatus == nil ? 0 : 22
+        return ceil(titleWidth + statusWidth + 4)
+    }
 
     private var timeLabel: some View {
-        Text(message.date, style: .time)
+        Text(displayTime)
             .font(.system(size: 10))
             .foregroundStyle(message.isOutgoing ? .white.opacity(0.75) : .secondary)
     }
@@ -2168,7 +2672,7 @@ private struct MessageBubble: View {
 
     private var stickerMetadata: some View {
         HStack(spacing: 4) {
-            Text(message.date, style: .time)
+            Text(displayTime)
                 .font(.system(size: 10))
             if let status = message.deliveryStatus {
                 deliveryStatusLabel(status)
@@ -2182,7 +2686,7 @@ private struct MessageBubble: View {
 
     private var imageMetadata: some View {
         HStack(spacing: 4) {
-            Text(message.date, style: .time)
+            Text(displayTime)
                 .font(.system(size: 10))
             if let status = message.deliveryStatus {
                 deliveryStatusLabel(status)
@@ -2220,7 +2724,7 @@ private struct MessageBubble: View {
     }
 
     private var photoBubbleWidth: CGFloat {
-        let reservedWidth: CGFloat = message.isOutgoing ? 72 : (isChat ? 104 : 72)
+        let reservedWidth: CGFloat = message.isOutgoing ? 72 : (isChat ? 116 : 72)
         return max(0, min(viewportWidth - reservedWidth, 300))
     }
 
@@ -2235,6 +2739,14 @@ private struct MessageBubble: View {
             isGroup: false
         )
     }
+}
+
+private struct ChatWallLookupResponse: Decodable {
+    let items: [ChatWallLookupItem]
+}
+
+private struct ChatWallLookupItem: Decodable {
+    let views: VKWallViewCount?
 }
 
 private struct ChatRichAttachmentCard: View {
@@ -2323,6 +2835,33 @@ private struct ChatRichAttachmentCard: View {
                 Color.clear
             }
             .frame(width: 120, height: 120)
+        case .gift(let gift):
+            VStack(spacing: 8) {
+                Label("Подарок", systemImage: "gift.fill")
+                    .font(.subheadline.weight(.semibold))
+                if let previewURL = gift.previewURL {
+                    CachedRemoteImage(url: previewURL, contentMode: .fit) {
+                        Image(systemName: "gift.fill")
+                            .font(.system(size: 50))
+                    }
+                    .frame(width: min(mediaWidth - 24, 180), height: 160)
+                } else {
+                    Image(systemName: "gift.fill")
+                        .font(.system(size: 48))
+                        .frame(height: 110)
+                }
+                if let caption = gift.caption, !caption.isEmpty {
+                    Text("«\(caption)»")
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .foregroundStyle(isOutgoing ? Color.white : Color.primary)
+            .frame(maxWidth: .infinity)
+            .padding(10)
+            .background(Color(.tertiarySystemFill).opacity(0.25),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         case .unsupported(let type):
             Label("Вложение: \(type)", systemImage: "paperclip")
                 .font(.caption)
@@ -2367,59 +2906,155 @@ private struct ChatRichAttachmentCard: View {
     }
 
     private func wallCard(_ wall: ChatWallPost) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        let photos = wall.attachments.compactMap { attachment -> ChatPhoto? in
+            if case .photo(let photo) = attachment { return photo }
+            return nil
+        }
+        let videos = wall.attachments.compactMap { attachment -> ChatVideo? in
+            if case .video(let video) = attachment { return video }
+            return nil
+        }
+        let audio = wall.attachments.compactMap { attachment -> ChatAudio? in
+            if case .audio(let track) = attachment { return track }
+            return nil
+        }
+        let otherAttachments = wall.attachments.filter { attachment in
+            switch attachment {
+            case .photo, .video, .audio: return false
+            default: return true
+            }
+        }
+        let contentWidth = max(1, mediaWidth - 20)
+        let primaryColor: Color = isOutgoing ? .white : Color(.label)
+        let secondaryColor: Color = isOutgoing ? .white.opacity(0.75) : Color(.secondaryLabel)
+        let linkColor: Color = isOutgoing ? .white : Color.appAccent
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 9) {
+                Image(systemName: "arrowshape.turn.up.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(secondaryColor)
+                    .frame(width: 18)
+
                 if let avatarURL = wall.authorAvatarURL {
                     CachedRemoteImage(url: avatarURL, contentMode: .fill) {
-                        Color(.tertiarySystemFill)
+                        Image(systemName: "person.crop.circle.fill")
+                            .resizable()
+                            .foregroundStyle(secondaryColor)
                     }
-                    .frame(width: 28, height: 28)
+                    .frame(width: 36, height: 36)
                     .clipShape(Circle())
                 } else {
-                    Image(systemName: "text.alignleft")
-                        .frame(width: 28, height: 28)
+                    Image(systemName: "person.crop.circle.fill")
+                        .resizable()
+                        .foregroundStyle(secondaryColor)
+                        .frame(width: 36, height: 36)
                 }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(wall.authorName).font(.caption.weight(.semibold)).lineLimit(1)
-                    Text("Запись").font(.caption2).foregroundColor(Color(.secondaryLabel))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(wall.authorName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(linkColor)
+                        .lineLimit(1)
+                    if let publicationDate = wall.publicationDate {
+                        Text(publicationDate.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption2)
+                            .foregroundStyle(secondaryColor)
+                    }
                 }
                 Spacer(minLength: 0)
-                if let url = wall.url {
-                    Link(destination: url) {
-                        Image(systemName: "arrow.up.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(Color(.label))
-                            .frame(width: 28, height: 28)
-                    }
-                    .accessibilityLabel("Открыть запись")
-                }
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+
             if !wall.text.isEmpty {
-                Text(wall.text).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                Text(wall.text)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
             }
-            ForEach(Array(wall.attachments.enumerated()), id: \.offset) { _, nested in
+
+            // All visual media comes directly after the post text.
+            if !photos.isEmpty {
+                ChatPhotoCollage(photos: photos, width: contentWidth, onTap: onPhotoTap)
+                    .frame(width: contentWidth)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 4)
+            }
+
+            ForEach(videos) { video in
                 ChatRichAttachmentCard(
-                    attachment: nested.richAttachment,
-                    mediaWidth: mediaWidth - 20,
+                    attachment: .video(video),
+                    mediaWidth: contentWidth,
                     isOutgoing: false,
                     onPhotoTap: onPhotoTap,
                     onVideoTap: onVideoTap,
                     onWallTap: onWallTap
                 )
+                .frame(width: contentWidth)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 4)
             }
-        }
-        .foregroundColor(Color(.label))
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .overlay {
-            Button { onWallTap(wall) } label: {
-                Color.clear.contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+            // Documents, polls, links and other content follow media,
+            // while audio tracks are deliberately kept at the very end.
+            ForEach(Array(otherAttachments.enumerated()), id: \.offset) { _, attachment in
+                ChatRichAttachmentCard(
+                    attachment: attachment.richAttachment,
+                    mediaWidth: contentWidth,
+                    isOutgoing: false,
+                    onPhotoTap: onPhotoTap,
+                    onVideoTap: onVideoTap,
+                    onWallTap: onWallTap
+                )
+                .frame(width: contentWidth, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Открыть запись и комментарии")
+
+            ForEach(Array(audio.enumerated()), id: \.offset) { _, track in
+                ChatRichAttachmentCard(
+                    attachment: .audio(track),
+                    mediaWidth: contentWidth,
+                    isOutgoing: false,
+                    onPhotoTap: onPhotoTap,
+                    onVideoTap: onVideoTap,
+                    onWallTap: onWallTap
+                )
+                .frame(width: contentWidth, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+            }
+
+            if wall.url != nil {
+                Button {
+                    onWallTap(wall)
+                } label: {
+                    Text("Открыть пост")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(linkColor)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(linkColor, lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+            }
+
         }
+        .foregroundStyle(primaryColor)
+        .padding(.bottom, 4)
+        .frame(width: max(1, mediaWidth), alignment: .leading)
+        // No nested card background: inherit the containing message bubble's
+        // blue (outgoing) or gray (incoming) fill and rounded corners.
     }
 }
 
@@ -2649,7 +3284,9 @@ private struct ChatPhotoCollage: View {
     let width: CGFloat
     let onTap: (ChatPhoto) -> Void
 
+    private let spacing: CGFloat = 2
     private var visiblePhotos: [ChatPhoto] { Array(photos.prefix(9)) }
+
     private var columnCount: Int {
         switch visiblePhotos.count {
         case 1: return 1
@@ -2659,22 +3296,75 @@ private struct ChatPhotoCollage: View {
     }
 
     var body: some View {
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: columnCount)
-        LazyVGrid(columns: columns, spacing: 2) {
-            ForEach(visiblePhotos) { photo in
+        Group {
+            if let photo = visiblePhotos.first, visiblePhotos.count == 1 {
+                singlePhoto(photo)
+            } else {
+                photoGrid
+            }
+        }
+        // Use an explicit width instead of relying on the image's intrinsic
+        // size. On iOS 26 a resizable image inside LazyVGrid + aspectRatio
+        // can otherwise collapse to its fitted content width, leaving the
+        // rest of the message bubble background exposed.
+        .frame(width: width, alignment: .leading)
+    }
+
+    private func singlePhoto(_ photo: ChatPhoto) -> some View {
+        let ratio = max(CGFloat(photo.aspectRatio), 0.1)
+        let naturalHeight = width / ratio
+        let height = min(max(naturalHeight, 120), 300)
+
+        return Button { onTap(photo) } label: {
+            CachedRemoteImage(url: photo.url, contentMode: .fill) {
+                Color(.secondarySystemBackground)
+                    .overlay { ProgressView() }
+            }
+            .frame(width: width, height: height)
+            .clipped()
+            .contentShape(Rectangle())
+        }
+        .frame(width: width, height: height)
+        .buttonStyle(.plain)
+    }
+
+    private var photoGrid: some View {
+        VStack(spacing: spacing) {
+            ForEach(0..<((visiblePhotos.count + columnCount - 1) / columnCount), id: \.self) { row in
+                photoGridRow(startIndex: row * columnCount)
+            }
+        }
+        .frame(width: width, alignment: .leading)
+    }
+
+    private func photoGridRow(startIndex: Int) -> some View {
+        let row = Array(visiblePhotos[startIndex..<min(startIndex + columnCount, visiblePhotos.count)])
+        let cellWidth = max(1, (width - CGFloat(columnCount - 1) * spacing) / CGFloat(columnCount))
+        // Keep a common row height, but derive it from the actual aspect ratios.
+        // Unlike fixed-height cells, portrait groups stay taller than panoramas.
+        let meanRatio = row.reduce(CGFloat(0)) { sum, photo in
+            sum + min(max(CGFloat(photo.aspectRatio), 0.45), 3.0)
+        } / CGFloat(max(row.count, 1))
+        let cellHeight = min(max(cellWidth / max(meanRatio, 0.45), 85), 240)
+
+        return HStack(spacing: spacing) {
+            ForEach(row) { photo in
                 Button { onTap(photo) } label: {
-                    CachedRemoteImage(url: photo.url, contentMode: .fit) {
+                    CachedRemoteImage(url: photo.url, contentMode: .fill) {
                         Color(.secondarySystemBackground)
                             .overlay { ProgressView() }
                     }
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(CGFloat(photo.aspectRatio), contentMode: .fit)
-                    .frame(maxHeight: visiblePhotos.count == 1 ? 300 : 180)
+                    .frame(width: cellWidth, height: cellHeight)
+                    .clipped()
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
+            if row.count < columnCount {
+                Spacer(minLength: 0)
+            }
         }
-        .frame(width: width)
+        .frame(width: width, alignment: .leading)
     }
 }
 
@@ -2773,11 +3463,12 @@ private struct TopRoundedRectangle: Shape {
 private struct ChatPhotoPicker: UIViewControllerRepresentable {
     @Binding var isPresented: Bool
     let selectionLimit: Int
+    let onUnsupportedVideo: () -> Void
     let onSelect: ([PendingChatPhoto]) -> Void
 
     func makeUIViewController(context: Context) -> PHPickerViewController {
         var configuration = PHPickerConfiguration()
-        configuration.filter = .images
+        configuration.filter = .any(of: [.images, .videos])
         configuration.selectionLimit = selectionLimit
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = context.coordinator
@@ -2804,6 +3495,10 @@ private struct ChatPhotoPicker: UIViewControllerRepresentable {
             }
             let box = ResultsBox(count: results.count)
             let group = DispatchGroup()
+            let containsVideo = results.contains {
+                $0.itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) &&
+                !$0.itemProvider.canLoadObject(ofClass: UIImage.self)
+            }
 
             for (index, result) in results.enumerated() {
                 guard result.itemProvider.canLoadObject(ofClass: UIImage.self) else { continue }
@@ -2841,6 +3536,7 @@ private struct ChatPhotoPicker: UIViewControllerRepresentable {
 
             group.notify(queue: .main) {
                 self.parent.onSelect(box.photos.compactMap { $0 })
+                if containsVideo { self.parent.onUnsupportedVideo() }
             }
         }
     }
@@ -2855,49 +3551,610 @@ private struct MessageBubbleShape: Shape {
     let isOutgoing: Bool
 
     func path(in rect: CGRect) -> Path {
-        let maximumRadius = min(rect.width, rect.height) / 2
-        let topLeading = min(topLeadingRadius, maximumRadius)
-        let topTrailing = min(topTrailingRadius, maximumRadius)
-        let bottomLeading = min(bottomLeadingRadius, maximumRadius)
-        let bottomTrailing = min(bottomTrailingRadius, maximumRadius)
-        var path = Path()
+        guard rect.width > 0, rect.height > 0 else { return Path() }
 
-        path.move(to: CGPoint(x: rect.minX + topLeading, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX - topTrailing, y: rect.minY))
-        path.addArc(center: CGPoint(x: rect.maxX - topTrailing, y: rect.minY + topTrailing), radius: topTrailing, startAngle: .degrees(270), endAngle: .degrees(0), clockwise: false)
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - bottomTrailing))
+        // Like Telegram's messageBubbleImage, reserve space for the tail
+        // *inside* the bubble frame. Reserve exactly the same gutter for
+        // grouped and ungrouped messages; only the last message draws a tail.
+        // This keeps every incoming left wall and outgoing right wall aligned.
+        let tailWidth: CGFloat = min(6, rect.width * 0.15)
+        let left = rect.minX + (!isOutgoing ? tailWidth : 0)
+        let right = rect.maxX - (isOutgoing ? tailWidth : 0)
+        let top = rect.minY
+        let bottom = rect.maxY
+        let maxRadius = min((right - left) / 2, rect.height / 2)
+        let tl = min(topLeadingRadius, maxRadius)
+        let tr = min(topTrailingRadius, maxRadius)
+        let bl = min(bottomLeadingRadius, maxRadius)
+        let br = min(bottomTrailingRadius, maxRadius)
+
+        var path = Path()
+        path.move(to: CGPoint(x: left + tl, y: top))
+        path.addLine(to: CGPoint(x: right - tr, y: top))
+        path.addQuadCurve(
+            to: CGPoint(x: right, y: top + tr),
+            control: CGPoint(x: right, y: top)
+        )
+
         if hasTail && isOutgoing {
+            // Telegram-style smoothly connected lower-right tail: the right
+            // wall grows into the tip, then curves back into the bottom edge.
+            let startY = max(top + tr, bottom - 15)
+            path.addLine(to: CGPoint(x: right, y: startY))
             path.addCurve(
-                to: CGPoint(x: rect.maxX + 5, y: rect.maxY - 6),
-                control1: CGPoint(x: rect.maxX + 1, y: rect.maxY - 4),
-                control2: CGPoint(x: rect.maxX + 5, y: rect.maxY - 5)
+                to: CGPoint(x: right + tailWidth, y: bottom - 2),
+                control1: CGPoint(x: right, y: bottom - 7),
+                control2: CGPoint(x: right + tailWidth * 0.4, y: bottom - 1)
             )
             path.addCurve(
-                to: CGPoint(x: rect.maxX - 12, y: rect.maxY),
-                control1: CGPoint(x: rect.maxX + 2, y: rect.maxY - 3),
-                control2: CGPoint(x: rect.maxX - 6, y: rect.maxY + 1)
+                to: CGPoint(x: right - min(11, (right - left) * 0.25), y: bottom),
+                control1: CGPoint(x: right + tailWidth - 2, y: bottom + 1),
+                control2: CGPoint(x: right - 2, y: bottom + 1)
             )
         } else {
-            path.addArc(center: CGPoint(x: rect.maxX - bottomTrailing, y: rect.maxY - bottomTrailing), radius: bottomTrailing, startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+            path.addLine(to: CGPoint(x: right, y: bottom - br))
+            path.addQuadCurve(
+                to: CGPoint(x: right - br, y: bottom),
+                control: CGPoint(x: right, y: bottom)
+            )
         }
-        path.addLine(to: CGPoint(x: rect.minX + (hasTail && !isOutgoing ? 12 : bottomLeading), y: rect.maxY))
+
         if hasTail && !isOutgoing {
+            // Mirrored incoming tail; the remaining bottom edge is straight.
+            let inset = min(11, (right - left) * 0.25)
+            path.addLine(to: CGPoint(x: left + inset, y: bottom))
             path.addCurve(
-                to: CGPoint(x: rect.minX - 5, y: rect.maxY - 6),
-                control1: CGPoint(x: rect.minX + 6, y: rect.maxY),
-                control2: CGPoint(x: rect.minX - 5, y: rect.maxY - 5)
+                to: CGPoint(x: left - tailWidth, y: bottom - 2),
+                control1: CGPoint(x: left + 2, y: bottom + 1),
+                control2: CGPoint(x: left - tailWidth + 2, y: bottom + 1)
             )
+            let endY = max(top + tl, bottom - 15)
             path.addCurve(
-                to: CGPoint(x: rect.minX, y: rect.maxY - 10),
-                control1: CGPoint(x: rect.minX - 4, y: rect.maxY - 3),
-                control2: CGPoint(x: rect.minX, y: rect.maxY - 3)
+                to: CGPoint(x: left, y: endY),
+                control1: CGPoint(x: left - tailWidth * 0.4, y: bottom - 1),
+                control2: CGPoint(x: left, y: bottom - 7)
             )
         } else {
-            path.addArc(center: CGPoint(x: rect.minX + bottomLeading, y: rect.maxY - bottomLeading), radius: bottomLeading, startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+            path.addLine(to: CGPoint(x: left + bl, y: bottom))
+            path.addQuadCurve(
+                to: CGPoint(x: left, y: bottom - bl),
+                control: CGPoint(x: left, y: bottom)
+            )
         }
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + topLeading))
-        path.addArc(center: CGPoint(x: rect.minX + topLeading, y: rect.minY + topLeading), radius: topLeading, startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+
+        path.addLine(to: CGPoint(x: left, y: top + tl))
+        path.addQuadCurve(
+            to: CGPoint(x: left + tl, y: top),
+            control: CGPoint(x: left, y: top)
+        )
         path.closeSubpath()
         return path
+    }
+}
+
+
+// The attachment browser intentionally reuses public VK API responses already
+// used elsewhere in the client. It does not call internal IM endpoints.
+private enum ChatAttachmentSection: String, CaseIterable, Identifiable {
+    case media, photos, videos, documents, audio, graffiti
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .media: return "Медиа"
+        case .photos: return "Фото OVK"
+        case .videos: return "Видео OVK"
+        case .documents: return "Документы"
+        case .audio: return "Аудио"
+        case .graffiti: return "Граффити"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .media: return "photo.on.rectangle.angled"
+        case .photos: return "photo.stack"
+        case .videos: return "play.rectangle"
+        case .documents: return "doc"
+        case .audio: return "music.note"
+        case .graffiti: return "scribble.variable"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .media: return "Фото и видео с устройства"
+        case .photos: return "Ваши фотографии OpenVK"
+        case .videos: return "Ваши видеозаписи OpenVK"
+        case .documents: return "Мои документы и загрузка файлов"
+        case .audio: return "Ваша музыка OpenVK"
+        case .graffiti: return "Создать рисунок"
+        }
+    }
+}
+
+private struct ChatAttachmentChoice: Identifiable, Hashable {
+    let token: String
+    let title: String
+    let detail: String?
+    let thumbnailURL: URL?
+    let icon: String
+
+    var id: String { token }
+
+    static func attachmentToken(type: String, ownerID: Int, id: Int, accessKey: String? = nil) -> String {
+        let base = "\(type)\(ownerID)_\(id)"
+        guard let key = accessKey, !key.isEmpty else { return base }
+        return base + "_\(key)"
+    }
+}
+
+private final class ChatAttachmentLibrary: ObservableObject {
+    @Published private(set) var items: [ChatAttachmentChoice] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var errorText: String?
+    private var loadGeneration = UUID()
+
+    func load(_ section: ChatAttachmentSection) {
+        let generation = UUID()
+        loadGeneration = generation
+        items = []
+        errorText = nil
+        guard let accountID = AuthService.shared.currentUser?.uid, accountID > 0 else {
+            errorText = "Войдите в аккаунт, чтобы выбрать вложения."
+            return
+        }
+        isLoading = true
+
+        switch section {
+        case .photos:
+            APIClient.shared.call(
+                method: "photos.getAll",
+                parameters: ["owner_id": String(accountID), "count": "100", "photo_sizes": "1"],
+                httpMethod: "GET",
+                as: VKPhotosResponse.self
+            ) { [weak self] result in
+                let mapped = result.map { response in
+                    (response.items ?? []).compactMap { photo -> ChatAttachmentChoice? in
+                        guard let id = photo.id, let owner = photo.ownerId else { return nil }
+                        let source = photo.sizes?.array.max(by: { ($0.width ?? 0) < ($1.width ?? 0) })
+                        let url = (source?.url ?? source?.src).flatMap(URL.init(string:))
+                        return ChatAttachmentChoice(
+                            token: ChatAttachmentChoice.attachmentToken(type: "photo", ownerID: owner, id: id),
+                            title: "Фотография \(id)", detail: nil, thumbnailURL: url, icon: "photo"
+                        )
+                    }
+                }
+                self?.finish(result: mapped.mapError { $0 as Error }, generation: generation)
+            }
+        case .videos:
+            APIClient.shared.call(
+                method: "video.get",
+                parameters: ["owner_id": String(accountID), "count": "100"],
+                httpMethod: "GET",
+                as: VKVideosResponse.self
+            ) { [weak self] result in
+                let mapped = result.map { response in
+                    (response.items ?? []).compactMap { video -> ChatAttachmentChoice? in
+                        guard let id = video.id, let owner = video.ownerId else { return nil }
+                        return ChatAttachmentChoice(
+                            token: ChatAttachmentChoice.attachmentToken(type: "video", ownerID: owner, id: id),
+                            title: video.title ?? "Видео", detail: nil,
+                            thumbnailURL: (video.image?.last?.url ?? video.image?.first?.url).flatMap(URL.init(string:)),
+                            icon: "play.rectangle"
+                        )
+                    }
+                }
+                self?.finish(result: mapped.mapError { $0 as Error }, generation: generation)
+            }
+        case .documents:
+            DocumentsService.shared.fetchMyDocuments(offset: 0, count: 100) { [weak self] result in
+                let mapped = result.map { docs in
+                    docs.map { doc in
+                        ChatAttachmentChoice(
+                            token: ChatAttachmentChoice.attachmentToken(type: "doc", ownerID: doc.ownerID, id: doc.id, accessKey: doc.accessKey),
+                            title: doc.title, detail: doc.formattedSize, thumbnailURL: nil,
+                            icon: DocumentTypeAppearance.iconName(for: doc.ext)
+                        )
+                    }
+                }
+                self?.finish(result: mapped, generation: generation)
+            }
+        case .audio:
+            AudioService.shared.getTracks(ownerID: accountID, count: 100) { [weak self] result in
+                let mapped = result.map { tracks in
+                    tracks.compactMap { track -> ChatAttachmentChoice? in
+                        guard let id = track.vkID, let owner = track.ownerID else { return nil }
+                        return ChatAttachmentChoice(
+                            token: ChatAttachmentChoice.attachmentToken(type: "audio", ownerID: owner, id: id),
+                            title: track.title, detail: track.artist, thumbnailURL: track.artworkURL.flatMap(URL.init(string:)),
+                            icon: "music.note"
+                        )
+                    }
+                }
+                self?.finish(result: mapped.mapError { $0 as Error }, generation: generation)
+            }
+        case .media, .graffiti:
+            isLoading = false
+        }
+    }
+
+    private func finish(result: Result<[ChatAttachmentChoice], Error>, generation: UUID) {
+        DispatchQueue.main.async {
+            guard self.loadGeneration == generation else { return }
+            self.isLoading = false
+            switch result {
+            case .success(let items): self.items = items
+            case .failure(let error): self.errorText = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ChatAttachmentPickerSheet: View {
+    let remainingSlots: Int
+    let onDeviceMedia: () -> Void
+    let onSelect: ([ChatAttachmentChoice]) -> Void
+    let onGraffiti: (PendingChatPhoto) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var library = ChatAttachmentLibrary()
+    @State private var section: ChatAttachmentSection?
+    @State private var selection: [ChatAttachmentChoice] = []
+    @State private var importingDocument = false
+    @State private var uploadingDocument = false
+    @State private var uploadError: String?
+    @State private var drawing = PKDrawing()
+    @State private var ink = UIColor.black
+
+    var body: some View {
+        NavigationView {
+            Group {
+                if let section {
+                    if section == .graffiti {
+                        graffitiEditor
+                    } else {
+                        libraryContent
+                    }
+                } else {
+                    categoryList
+                }
+            }
+            .navigationBarTitle(section?.title ?? "Вложения", displayMode: .inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if section != nil {
+                        Button("Назад") { section = nil }
+                    } else {
+                        Button("Закрыть") { dismiss() }
+                    }
+                }
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    if section == .documents {
+                        Button {
+                            importingDocument = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .disabled(uploadingDocument)
+                        .accessibilityLabel("Загрузить документ")
+                    }
+                    if section != nil && section != .graffiti && !selection.isEmpty {
+                        Button("Добавить \(selection.count)") { onSelect(selection) }
+                            .disabled(selection.count > remainingSlots)
+                    }
+                }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+        .fileImporter(isPresented: $importingDocument, allowedContentTypes: [.item]) { result in
+            switch result {
+            case .success(let url): uploadDocument(url)
+            case .failure(let error): uploadError = error.localizedDescription
+            }
+        }
+        .alert("Загрузка документа", isPresented: Binding(
+            get: { uploadError != nil },
+            set: { if !$0 { uploadError = nil } }
+        )) {
+            Button("ОК", role: .cancel) { uploadError = nil }
+        } message: {
+            Text(uploadError ?? "")
+        }
+    }
+
+    private var categoryList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(ChatAttachmentSection.allCases) { category in
+                    Button {
+                        if category == .media {
+                            onDeviceMedia()
+                        } else {
+                            section = category
+                            if category != .graffiti { library.load(category) }
+                        }
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: category.icon)
+                                .font(.system(size: 23))
+                                .foregroundColor(.appAccent)
+                                .frame(width: 42, height: 42)
+                                .background(Color.appAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(category.title).font(.body.weight(.medium)).foregroundStyle(.primary)
+                                Text(category.description).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if category != .graffiti { Divider().padding(.leading, 74) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var libraryContent: some View {
+        if library.isLoading || uploadingDocument {
+            ProgressView(uploadingDocument ? "Загрузка документа..." : "Загрузка...")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = library.errorText {
+            VStack(spacing: 12) {
+                Text(error).multilineTextAlignment(.center)
+                Button("Повторить") {
+                    if let section { library.load(section) }
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if library.items.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: section?.icon ?? "tray")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.secondary)
+                Text("Здесь пока ничего нет")
+                if section == .documents {
+                    Text("Нажмите + для загрузки документа")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(library.items) { item in
+                Button { toggle(item) } label: {
+                    HStack(spacing: 12) {
+                        if let url = item.thumbnailURL {
+                            CachedRemoteImage(url: url, contentMode: .fill) {
+                                Image(systemName: item.icon)
+                            }
+                            .frame(width: 48, height: 48)
+                            .clipped()
+                            .cornerRadius(7)
+                        } else {
+                            Image(systemName: item.icon)
+                                .font(.system(size: 22))
+                                .foregroundColor(.appAccent)
+                                .frame(width: 48, height: 48)
+                                .background(Color.appAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).foregroundStyle(.primary).lineLimit(2)
+                            if let detail = item.detail {
+                                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: selection.contains(item) ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 22))
+                            .foregroundColor(selection.contains(item) ? .appAccent : .secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
+        }
+    }
+
+    private func toggle(_ item: ChatAttachmentChoice) {
+        if selection.contains(item) {
+            selection.removeAll { $0.id == item.id }
+        } else if selection.count < remainingSlots {
+            selection.append(item)
+        }
+    }
+
+    private var graffitiEditor: some View {
+        VStack(spacing: 14) {
+            ChatGraffitiCanvas(drawing: $drawing, ink: ink)
+                .frame(maxWidth: .infinity)
+                .frame(height: 280)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 12)
+
+            HStack(spacing: 16) {
+                ForEach([UIColor.black, .red, .blue, .green], id: \.description) { color in
+                    Button { ink = color } label: {
+                        Circle()
+                            .fill(Color(color))
+                            .frame(width: 30, height: 30)
+                            .overlay(Circle().stroke(.gray.opacity(0.4), lineWidth: 1))
+                    }
+                }
+                Spacer()
+                Button("Очистить") { drawing = PKDrawing() }
+            }
+            .padding(.horizontal, 20)
+
+            Button("Добавить граффити") { saveGraffiti() }
+                .buttonStyle(.borderedProminent)
+                .disabled(drawing.bounds.isEmpty || remainingSlots == 0)
+            Text("Рисунок отправляется как фотография, поскольку API сообщений не поддерживает отдельный тип граффити.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+            Spacer()
+        }
+        .padding(.top, 16)
+    }
+
+    private func saveGraffiti() {
+        let size = CGSize(width: 600, height: 400)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            drawing.image(from: CGRect(origin: .zero, size: size), scale: 1).draw(in: CGRect(origin: .zero, size: size))
+        }
+        guard let data = image.jpegData(compressionQuality: 0.87) else { return }
+        onGraffiti(PendingChatPhoto(thumbnail: image, data: data))
+    }
+
+    private func uploadDocument(_ url: URL) {
+        uploadingDocument = true
+        ChatAttachmentDocumentUploader.upload(url: url) { result in
+            uploadingDocument = false
+            switch result {
+            case .success(let item):
+                selection.append(item)
+                if let section { library.load(section) }
+            case .failure(let error):
+                uploadError = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ChatGraffitiCanvas: UIViewRepresentable {
+    @Binding var drawing: PKDrawing
+    let ink: UIColor
+
+    func makeUIView(context: Context) -> PKCanvasView {
+        let canvas = PKCanvasView()
+        canvas.delegate = context.coordinator
+        canvas.backgroundColor = .white
+        canvas.isOpaque = true
+        canvas.drawingPolicy = .anyInput
+        canvas.tool = PKInkingTool(.pen, color: ink, width: 5)
+        return canvas
+    }
+
+    func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        if canvas.drawing.dataRepresentation() != drawing.dataRepresentation() {
+            canvas.drawing = drawing
+        }
+        canvas.tool = PKInkingTool(.pen, color: ink, width: 5)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject, PKCanvasViewDelegate {
+        var parent: ChatGraffitiCanvas
+        init(parent: ChatGraffitiCanvas) { self.parent = parent }
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            parent.drawing = canvasView.drawing
+        }
+    }
+}
+
+private enum ChatAttachmentDocumentUploadError: LocalizedError {
+    case unavailable, fileTooLarge, malformedResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Текущий сервер OpenVK не поддерживает загрузку документов через API (docs.getUploadServer/docs.save). Вы можете прикрепить уже загруженный документ."
+        case .fileTooLarge: return "Файл превышает ограничение 20 МБ."
+        case .malformedResponse: return "Сервер вернул некорректный результат загрузки."
+        }
+    }
+}
+
+private struct ChatAttachmentDocumentUploader {
+    private struct UploadServer: Decodable { let uploadUrl: String }
+    private struct UploadResponse: Decodable { let file: String }
+
+    static func upload(url: URL, completion: @escaping (Result<ChatAttachmentChoice, Error>) -> Void) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+
+        do {
+            let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard fileSize <= 20 * 1024 * 1024 else {
+                completion(.failure(ChatAttachmentDocumentUploadError.fileTooLarge))
+                return
+            }
+            let data = try Data(contentsOf: url)
+            let name = url.lastPathComponent.replacingOccurrences(of: "\"", with: "")
+            Task {
+                do {
+                    // OpenVK currently returns 0 for this method. The flow is
+                    // ready for servers implementing VK's upload endpoint.
+                    let uploadServer = try await APIClient.shared.call(
+                        method: "docs.getUploadServer", parameters: [:],
+                        httpMethod: "GET", as: UploadServer.self
+                    )
+                    guard let endpoint = URL(string: uploadServer.uploadUrl) else {
+                        throw ChatAttachmentDocumentUploadError.unavailable
+                    }
+                    let boundary = "OpenVK-\(UUID().uuidString)"
+                    var request = URLRequest(url: endpoint)
+                    request.httpMethod = "POST"
+                    request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+                    var body = Data()
+                    body.append(contentsOf: "--\(boundary)\r\n".utf8)
+                    body.append(contentsOf: "Content-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\n".utf8)
+                    body.append(contentsOf: "Content-Type: application/octet-stream\r\n\r\n".utf8)
+                    body.append(data)
+                    body.append(contentsOf: "\r\n--\(boundary)--\r\n".utf8)
+                    request.httpBody = body
+                    let (uploaded, response) = try await URLSession.shared.data(for: request)
+                    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                        throw ChatAttachmentDocumentUploadError.malformedResponse
+                    }
+                    let file = try JSONDecoder().decode(UploadResponse.self, from: uploaded)
+                    let saved: [VKDocumentItem] = try await APIClient.shared.call(
+                        method: "docs.save",
+                        parameters: ["file": file.file, "title": name, "tags": ""],
+                        httpMethod: "POST", as: [VKDocumentItem].self
+                    )
+                    guard let item = saved.first, let id = item.id, let owner = item.ownerId else {
+                        throw ChatAttachmentDocumentUploadError.malformedResponse
+                    }
+                    let choice = ChatAttachmentChoice(
+                        token: ChatAttachmentChoice.attachmentToken(type: "doc", ownerID: owner, id: id, accessKey: item.accessKey),
+                        title: item.title ?? name, detail: nil, thumbnailURL: nil,
+                        icon: DocumentTypeAppearance.iconName(for: item.ext ?? "")
+                    )
+                    await MainActor.run { completion(.success(choice)) }
+                } catch {
+                    await MainActor.run {
+                        // Server method stubs return numeric 0; decoding fails.
+                        let mapped: Error
+                        if error is DecodingError {
+                            mapped = ChatAttachmentDocumentUploadError.unavailable
+                        } else if let apiError = error as? APIError,
+                                  case .decoding = apiError {
+                            mapped = ChatAttachmentDocumentUploadError.unavailable
+                        } else { mapped = error }
+                        completion(.failure(mapped))
+                    }
+                }
+            }
+        } catch {
+            completion(.failure(error))
+        }
     }
 }

@@ -16,32 +16,36 @@ struct DetailedProfileInfoView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     InfoSection(title: "Основная информация") {
-                        InfoRow(label: "Имя", value: user.displayName)
-                        InfoRow(label: "Никнейм", value: "@\(user.username)")
-                        if let status = user.status, !status.isEmpty {
+                        if let name = filled(user.displayName) {
+                            InfoRow(label: "Имя", value: name)
+                        }
+                        if let username = filled(user.username) {
+                            InfoRow(label: "Никнейм", value: "@\(username)")
+                        }
+                        if let status = filled(user.status) {
                             InfoRow(label: "Статус", value: status)
                         }
                         if user.isGroup != true {
-                            InfoRow(
-                                label: "Активность",
-                                value: user.isOnline ? "В сети" : (user.lastSeen ?? "Не в сети"),
-                                platform: user.onlinePlatform
-                            )
+                            if user.isOnline {
+                                InfoRow(label: "Активность", value: "В сети", platform: user.onlinePlatform)
+                            } else if let lastSeen = filled(user.lastSeen) {
+                                InfoRow(label: "Активность", value: lastSeen)
+                            }
                         }
                     }
-                    
-                    if user.site != nil || user.city != nil {
+
+                    if filled(user.site) != nil || filled(user.city) != nil {
                         InfoSection(title: "Контактная информация") {
-                            if let site = user.site {
+                            if let site = filled(user.site) {
                                 InfoRow(label: "Личный сайт", value: site, isLink: true)
                             }
-                            if let city = user.city {
+                            if let city = filled(user.city) {
                                 InfoRow(label: "Город", value: city)
                             }
                         }
                     }
-                    
-                    if let about = user.about, !about.isEmpty {
+
+                    if let about = filled(user.about) {
                         InfoSection(title: "Личная информация") {
                             InfoRow(label: "О себе", value: about)
                         }
@@ -61,6 +65,12 @@ struct DetailedProfileInfoView: View {
                 }
             }
         }
+    }
+
+    private func filled(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 }
 

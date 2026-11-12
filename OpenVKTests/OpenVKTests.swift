@@ -178,6 +178,55 @@ class OpenVKTests: XCTestCase {
         XCTAssertNil(users[3].lastSeen?.platformName)
     }
 
+    private func offlineMessages(_ ids: ClosedRange<Int>) throws -> [ChatMessage] {
+        try ids.map { id in
+            let data = Data("{\"id\":\(id),\"from_id\":2,\"date\":1700000000,\"text\":\"message \(id)\"}".utf8)
+            return ChatMessage(message: try JSONDecoder().decode(VKHistoryMessage.self, from: data), profiles: [])
+        }
+    }
+
+    func testOfflineHistoryRestoresAroundAnUncachedAnchor() throws {
+        let messages = try offlineMessages(1...100)
+        let page = try XCTUnwrap(OfflineMessageHistory.page(messages: messages, offset: -20, count: 40, startMessageID: 50, reverse: false))
+        XCTAssertEqual(page.messages.map(\.id), Array(31...70))
+        XCTAssertEqual(page.count, 70)
+    }
+
+    func testOfflineHistoryStopsAtBothLocalBoundaries() throws {
+        let messages = try offlineMessages(1...100)
+        let older = try XCTUnwrap(OfflineMessageHistory.page(messages: messages, offset: 1, count: 40, startMessageID: 10, reverse: false))
+        XCTAssertEqual(older.messages.map(\.id), Array(1...9))
+        XCTAssertEqual(older.count, older.messages.count + 1)
+        let newer = try XCTUnwrap(OfflineMessageHistory.page(messages: messages, offset: 1, count: 40, startMessageID: 90, reverse: true))
+        XCTAssertEqual(newer.messages.map(\.id), Array(91...100))
+        XCTAssertEqual(newer.count, newer.messages.count + 1)
+        let end = try XCTUnwrap(OfflineMessageHistory.page(messages: messages, offset: 1, count: 40, startMessageID: 100, reverse: true))
+        XCTAssertTrue(end.messages.isEmpty)
+        XCTAssertEqual(end.count, 1)
+    }
+
+    func testOfflineHistoryDoesNotInventMissingAnchor() throws {
+        let messages = try offlineMessages(1...10)
+        XCTAssertNil(OfflineMessageHistory.page(messages: messages, offset: -20, count: 40, startMessageID: 500, reverse: false))
+        let page = try XCTUnwrap(OfflineMessageHistory.page(messages: messages, offset: 0, count: 40, startMessageID: nil, reverse: false))
+        XCTAssertEqual(page.messages.map(\.id), Array(1...10))
+    }
+
+    func testOfflineFallbackDoesNotHideAuthorizationErrors() {
+        XCTAssertTrue(MessagesService.isConnectionFailure(APIError.transport(URLError(.notConnectedToInternet))))
+        XCTAssertTrue(MessagesService.isConnectionFailure(APIError.http(503)))
+        XCTAssertFalse(MessagesService.isConnectionFailure(APIError.vk(code: 5, message: "Expired token")))
+        XCTAssertFalse(MessagesService.isConnectionFailure(APIError.vk(code: 15, message: "Access denied")))
+        XCTAssertFalse(MessagesService.isConnectionFailure(APIError.http(403)))
+    }
+
+    func testLongPollConnectionTitles() {
+        XCTAssertEqual(LongPollConnectionState.connecting.title, "Обновление…")
+        XCTAssertEqual(LongPollConnectionState.offline.title, "Подключение…")
+        XCTAssertEqual(LongPollConnectionState.connected.title, "Сообщения")
+        XCTAssertNil(LongPollConnectionState.connected.chatSubtitle)
+    }
+
     func testPerformanceExample() throws {
         self.measure {
         }

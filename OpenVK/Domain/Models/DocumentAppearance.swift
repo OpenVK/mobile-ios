@@ -8,7 +8,15 @@ import SwiftUI
 
 extension Document {
     /// SF Symbol для типа файла.
-    var iconName: String {
+    var iconName: String { DocumentTypeAppearance.iconName(for: ext) }
+
+    /// Цвет иконки для типа файла.
+    var iconColor: Color { DocumentTypeAppearance.iconColor(for: ext) }
+}
+
+// Shared by both the Documents screen and message attachment materials.
+enum DocumentTypeAppearance {
+    static func iconName(for ext: String) -> String {
         let cleanExt = ext.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         switch cleanExt {
         case "pdf":
@@ -28,8 +36,7 @@ extension Document {
         }
     }
 
-    /// Цвет иконки для типа файла.
-    var iconColor: Color {
+    static func iconColor(for ext: String) -> Color {
         let cleanExt = ext.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         switch cleanExt {
         case "pdf":
