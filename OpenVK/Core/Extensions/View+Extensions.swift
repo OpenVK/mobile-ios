@@ -45,6 +45,7 @@ struct CustomBackButtonModifier: ViewModifier {
             .navigationBarBackButtonHidden(true)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
+                    if presentationMode.wrappedValue.isPresented {
                     Button(action: {
                         presentationMode.wrappedValue.dismiss()
                     }) {
@@ -54,6 +55,7 @@ struct CustomBackButtonModifier: ViewModifier {
                             Text(title)
                                 .font(.system(size: 17))
                         }
+                    }
                     }
                 }
             }

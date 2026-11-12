@@ -19,6 +19,7 @@ final class ProfileViewModel: ObservableObject {
     private var offset: Int = 0
     private var canLoadMore: Bool = true
     private var lastTriggeredPostID: Int? = nil
+    private var hasLoadedProfile = false
     private let service: ProfileServiceProtocol
 
     init(user: User = .current, service: ProfileServiceProtocol = ProfileService.shared) {
@@ -26,7 +27,13 @@ final class ProfileViewModel: ObservableObject {
         self.service = service
     }
 
+    func loadIfNeeded() {
+        guard !hasLoadedProfile, !isLoading else { return }
+        load()
+    }
+
     func load() {
+        guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
         offset = 0
@@ -37,6 +44,7 @@ final class ProfileViewModel: ObservableObject {
             guard let self = self else { return }
             switch result {
             case .success(let fetchedUser):
+                self.hasLoadedProfile = true
                 self.user = fetchedUser
                 self.avatarRefreshToken = UUID()
                 AuthService.shared.updateCurrentUserIfNeeded(fetchedUser)

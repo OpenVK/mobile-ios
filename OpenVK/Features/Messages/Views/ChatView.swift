@@ -1816,7 +1816,16 @@ extension View {
     }
 
     @ViewBuilder func chatNavigationBarBackground() -> some View {
-        if #available(iOS 26.0, *) {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            if #available(iOS 16.0, *) {
+                // The split-chat navbar must stay opaque; hiding the toolbar
+                // background exposed the chat wallpaper in some conversations.
+                self.toolbarBackground(Color(.secondarySystemBackground), for: .navigationBar)
+                    .toolbarBackground(.visible, for: .navigationBar)
+            } else {
+                self
+            }
+        } else if #available(iOS 26.0, *) {
             self.toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         } else if #available(iOS 18.0, *) {
             self.toolbarBackgroundVisibility(.hidden, for: .navigationBar)
