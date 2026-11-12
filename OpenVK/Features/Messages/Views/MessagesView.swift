@@ -10,6 +10,7 @@ struct MessagesView: View {
     @ObservedObject private var longPoll = LongPollService.shared
     @AppStorage("openvk.ipad.split_chats") private var splitChats = false
     @State private var selectedConversation: Conversation?
+    @State private var tabletShowingArchive = false
     @State private var showCreateChat = false
     @State private var showsArchive = false
     @State private var showsArchiveTip = false
@@ -30,6 +31,7 @@ struct MessagesView: View {
         MessagesNavigationContainer {
             archiveNavigableContent
                 .navigationTitle(toolbarTitle)
+                .navigationBarHidden(UIDevice.current.userInterfaceIdiom == .pad && splitChats)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
                         if viewModel.hasArchivedConversations {
@@ -136,7 +138,10 @@ struct MessagesView: View {
             }
         }
         .onChange(of: splitChats) { enabled in
-            if !enabled { selectedConversation = nil }
+            if !enabled {
+                selectedConversation = nil
+                tabletShowingArchive = false
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openvkLongPollDidReceiveEvent)) { notification in
             let type = notification.userInfo?["type"] as? Int ?? -1
@@ -255,9 +260,8 @@ struct MessagesView: View {
     private var tabletSplitContent: some View {
         GeometryReader { geometry in
             HStack(spacing: 0) {
-                content
-                    .frame(width: geometry.size.width * 0.30,
-                           height: geometry.size.height)
+                tabletConversationList
+                    .frame(width: geometry.size.width * 0.30, height: geometry.size.height)
                 Divider()
 
                 Group {
@@ -286,6 +290,100 @@ struct MessagesView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var tabletConversationList: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                if tabletShowingArchive {
+                    Button { tabletShowingArchive = false } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
+                    }
+                    .accessibilityLabel("Вернуться к сообщениям")
+                }
+                Text(tabletShowingArchive ? "Архив" : "Сообщения")
+                    .font(.headline)
+                Spacer(minLength: 0)
+                if !tabletShowingArchive {
+                    if viewModel.hasArchivedConversations {
+                        Button {
+                            tabletShowingArchive = true
+                            viewModel.refreshArchive()
+                        } label: {
+                            Image(systemName: "archivebox")
+                        }
+                        .accessibilityLabel("Архив чатов")
+                    }
+                    Button { showCreateChat = true } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .accessibilityLabel("Написать сообщение")
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 48)
+
+            if tabletShowingArchive {
+                tabletArchivedConversations
+            } else {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        "Поиск чатов",
+                        text: Binding(
+                            get: { viewModel.searchQuery },
+                            set: { viewModel.updateSearch(query: $0) }
+                        )
+                    )
+                    .textFieldStyle(.plain)
+                    .autocorrectionDisabled(true)
+                }
+                .padding(10)
+                .background(Color(.secondarySystemBackground),
+                            in: RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                content
+            }
+        }
+        .background(Color(.systemBackground))
+    }
+
+    private var tabletArchivedConversations: some View {
+        List {
+            ForEach(viewModel.archivedConversations) { conversation in
+                Button {
+                    selectedConversation = conversation
+                } label: {
+                    ConversationRow(conversation: conversation,
+                                    typingText: viewModel.typingText(for: conversation))
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(selectedConversation?.id == conversation.id
+                    ? Color.appAccent.opacity(0.12) : Color.clear)
+                .contextMenu {
+                    Button {
+                        viewModel.archive(conversation, archived: false)
+                        if selectedConversation?.id == conversation.id {
+                            selectedConversation = nil
+                        }
+                    } label: {
+                        Label("Вернуть из архива", systemImage: "tray.and.arrow.up")
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .overlay {
+            if viewModel.archivedConversations.isEmpty {
+                Text("Архив пуст")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
             }
         }
     }
