@@ -7,8 +7,6 @@ struct SettingsView: View {
     @EnvironmentObject var auth: AuthService
 
     @State private var showLoginSheet = false
-    @AppStorage("openvk.ipad.split_chats") private var splitChats = false
-
     var body: some View {
         NavigationView {
             List {
@@ -112,9 +110,6 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text("Настройки")) {
-                    if UIDevice.current.userInterfaceIdiom == .pad {
-                        Toggle("Показывать список чатов слева в диалогах", isOn: $splitChats)
-                    }
                     NavigationLink(destination: FeedSettingsView()) {
                         SettingsRow(icon: "list.bullet.rectangle", title: "Лента", iconColor: .appAccent)
                     }
@@ -1001,12 +996,19 @@ extension View {
 }
 
 struct AppearanceSettingsView: View {
+    @AppStorage("openvk.ipad.split_chats") private var splitChats = false
     @AppStorage("openvk.theme_selection") private var themeSelection = 0 // 0: Системная, 1: Светлая, 2: Тёмная
     @AppStorage("openvk.accent_color") private var accentColorSelection = "Синий"
     @AppStorage("openvk.font_scale") private var fontSizeSelection = 1.0 // Slider scale from 0.8 to 1.4
 
     let themes = ["Системная", "Светлая", "Тёмная"]
     let accentColors = ["Синий", "Голубой", "Розовый", "Фиолетовый", "Зеленый", "Оранжевый", "Красный"]
+
+    private var hasChatSection: Bool {
+        if UIDevice.current.userInterfaceIdiom == .pad { return true }
+        if #available(iOS 16.0, *) { return true }
+        return false
+    }
 
     var body: some View {
         List {
@@ -1032,10 +1034,22 @@ struct AppearanceSettingsView: View {
                 }
             }
 
-            if #available(iOS 16.0, *) {
+            if hasChatSection {
                 Section(header: Text("Чаты")) {
-                    NavigationLink(destination: ChatAppearanceSettingsView()) {
-                        SettingsRow(icon: "message.fill", title: "Оформление чата", iconColor: .appAccent)
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        Toggle(isOn: $splitChats) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "sidebar.left")
+                                    .foregroundColor(.appAccent)
+                                    .frame(width: 24)
+                                Text("Показывать список чатов слева в диалогах")
+                            }
+                        }
+                    }
+                    if #available(iOS 16.0, *) {
+                        NavigationLink(destination: ChatAppearanceSettingsView()) {
+                            SettingsRow(icon: "message.fill", title: "Оформление чата", iconColor: .appAccent)
+                        }
                     }
                 }
             }
@@ -1055,6 +1069,8 @@ struct ChatAppearanceSettingsView: View {
     @AppStorage("openvk.chat_wallpaper_color") private var selectedColor = "Системный"
     @AppStorage("openvk.chat_wallpaper_image") private var wallpaperData = Data()
     @AppStorage("openvk.chat_wallpaper_blur") private var isBlurred = false
+    @AppStorage("openvk.chat_wallpaper_transparency_enabled") private var isTransparencyEnabled = false
+    @AppStorage("openvk.chat_wallpaper_transparency") private var transparency = 0.30
     @State private var selectedPhoto: PhotosPickerItem?
 
     private let colors = ["Системный", "Голубой", "Фиолетовый", "Розовый", "Зелёный", "Оранжевый", "Графит"]
@@ -1083,6 +1099,23 @@ struct ChatAppearanceSettingsView: View {
 
                 Toggle("Размытие", isOn: $isBlurred)
                     .disabled(wallpaperData.isEmpty)
+
+                Toggle("Прозрачность фона", isOn: $isTransparencyEnabled)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Уровень прозрачности")
+                        Spacer()
+                        Text("\(Int((transparency * 100).rounded()))%")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    Slider(value: $transparency, in: 0...1, step: 0.05)
+                        .tint(.appAccent)
+                        .accessibilityLabel("Уровень прозрачности фона")
+                }
+                .disabled(!isTransparencyEnabled)
             }
 
             Section("Цвет") {
@@ -1129,18 +1162,26 @@ struct ChatWallpaperBackground: View {
     @AppStorage("openvk.chat_wallpaper_color") private var selectedColor = "Системный"
     @AppStorage("openvk.chat_wallpaper_image") private var wallpaperData = Data()
     @AppStorage("openvk.chat_wallpaper_blur") private var isBlurred = false
+    @AppStorage("openvk.chat_wallpaper_transparency_enabled") private var isTransparencyEnabled = false
+    @AppStorage("openvk.chat_wallpaper_transparency") private var transparency = 0.30
 
     var body: some View {
         ZStack {
-            Self.color(for: selectedColor)
-            if let image = UIImage(data: wallpaperData) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .blur(radius: isBlurred ? 18 : 0)
-                    .scaleEffect(isBlurred ? 1.08 : 1)
-                    .overlay(Color.black.opacity(isBlurred ? 0.12 : 0))
+            Color(.systemBackground)
+            ZStack {
+                Self.color(for: selectedColor)
+                if let image = UIImage(data: wallpaperData) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .blur(radius: isBlurred ? 18 : 0)
+                        .scaleEffect(isBlurred ? 1.08 : 1)
+                        .overlay(Color.black.opacity(isBlurred ? 0.12 : 0))
+                }
             }
+            // Fade the configured wallpaper into the system background.
+            // Disabled preserves the previous fully opaque appearance.
+            .opacity(isTransparencyEnabled ? 1 - min(max(transparency, 0), 1) : 1)
         }
         .clipped()
     }
