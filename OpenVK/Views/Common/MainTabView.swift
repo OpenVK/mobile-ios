@@ -187,7 +187,6 @@ struct MainTabView: View {
                             .background(.regularMaterial, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .frame(maxHeight: .infinity, alignment: .center)
                     .accessibilityLabel("Показать боковое меню")
                     .zIndex(3)
                 }

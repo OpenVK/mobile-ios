@@ -340,7 +340,7 @@ struct MessagesView: View {
                         )
                     )
                     .textFieldStyle(.plain)
-                    .autocorrectionDisabled(true)
+                    .disableAutocorrection(true)
                 }
                 .padding(10)
                 .background(Color(.secondarySystemBackground),
