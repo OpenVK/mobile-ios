@@ -7,13 +7,20 @@
 
 import Foundation
 
+struct PostPublicationMetadata {
+    var sourceURL: String = ""
+    var latitude: Double?
+    var longitude: Double?
+    var placeName: String = ""
+}
+
 protocol FeedServiceProtocol {
     func fetchFeed(isGlobal: Bool,
                    startFrom: String?,
                    completion: @escaping (Result<(posts: [Post], nextFrom: String?), Error>) -> Void)
     func getPostById(ownerID: Int, postID: Int, completion: @escaping (Result<Post, Error>) -> Void)
     func like(post: Post, completion: @escaping (Result<Post, Error>) -> Void)
-    func createPost(text: String, ownerID: Int?, attachments: String?, explicit: Bool, fromGroup: Bool, signed: Bool, targetUser: User?, completion: @escaping (Result<Post, Error>) -> Void)
+    func createPost(text: String, ownerID: Int?, attachments: String?, explicit: Bool, fromGroup: Bool, signed: Bool, targetUser: User?, metadata: PostPublicationMetadata?, completion: @escaping (Result<Post, Error>) -> Void)
     func uploadPhoto(photoData: Data, ownerID: Int?, completion: @escaping (Result<String, Error>) -> Void)
     func getWallUploadServer(ownerID: Int?, completion: @escaping (Result<String, Error>) -> Void)
     func uploadPhotoToServer(urlString: String, photoData: Data, ownerID: Int?, completion: @escaping (Result<String, Error>) -> Void)
@@ -140,6 +147,7 @@ final class FeedService: FeedServiceProtocol {
         fromGroup: Bool = false,
         signed: Bool = false,
         targetUser: User? = nil,
+        metadata: PostPublicationMetadata? = nil,
         completion: @escaping (Result<Post, Error>) -> Void
     ) {
         struct VKWallPostResponse: Decodable {
@@ -151,6 +159,14 @@ final class FeedService: FeedServiceProtocol {
         
         let ownerId = ownerID ?? AuthService.shared.currentUser?.uid ?? 0
         var params: [String: String] = ["owner_id": String(ownerId), "message": text]
+        if let metadata = metadata {
+            if !metadata.sourceURL.isEmpty { params["copyright"] = metadata.sourceURL }
+            if let latitude = metadata.latitude, let longitude = metadata.longitude {
+                params["lat"] = String(latitude)
+                params["long"] = String(longitude)
+                params["place_name"] = metadata.placeName
+            }
+        }
         if let attachments = attachments {
             params["attachments"] = attachments
         }

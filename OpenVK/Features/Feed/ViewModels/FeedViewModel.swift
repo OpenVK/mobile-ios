@@ -182,7 +182,7 @@ final class FeedViewModel: ObservableObject {
     }
 
     func addPost(text: String) {
-        service.createPost(text: text, ownerID: nil, attachments: nil, explicit: false, fromGroup: false, signed: false, targetUser: nil) { [weak self] result in
+        service.createPost(text: text, ownerID: nil, attachments: nil, explicit: false, fromGroup: false, signed: false, targetUser: nil, metadata: nil) { [weak self] result in
             guard let self = self else { return }
             switch result {
             case .success(let post):

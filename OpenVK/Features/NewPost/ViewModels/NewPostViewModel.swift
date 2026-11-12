@@ -9,7 +9,13 @@ final class NewPostViewModel: ObservableObject {
 
     @Published var text: String = ""
     @Published private(set) var isSubmitting: Bool = false
-    @Published var selectedPhotosData: [Data] = []
+    @Published var attachmentSelection = AttachmentPickerSelection() {
+        didSet {
+            if oldValue.pollDraft != attachmentSelection.pollDraft { savedPollAttachment = nil }
+        }
+    }
+    private var savedPollAttachment: String?
+
     @Published var isExplicit: Bool = false
     @Published var fromGroup: Bool = false
     @Published var signed: Bool = false
@@ -17,7 +23,9 @@ final class NewPostViewModel: ObservableObject {
     @Published var errorMessage: String? = nil
     @Published var showErrorAlert: Bool = false
 
-    var canPublish: Bool { (!text.isEmpty || !selectedPhotosData.isEmpty) && !isSubmitting }
+    var canPublish: Bool {
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachmentSelection.selectedPhotosData.isEmpty || !attachmentSelection.selectedAttachments.isEmpty || attachmentSelection.pollDraft != nil) && !isSubmitting
+    }
 
     var isGroup: Bool {
         (ownerID ?? 0) < 0 || targetUser?.isGroup == true
@@ -72,19 +80,19 @@ final class NewPostViewModel: ObservableObject {
         guard canPublish else { return }
         isSubmitting = true
         
-        if !selectedPhotosData.isEmpty {
+        if !attachmentSelection.selectedPhotosData.isEmpty {
             service.getWallUploadServer(ownerID: ownerID) { [weak self] serverResult in
                 guard let self = self else { return }
                 switch serverResult {
                 case .success(let uploadUrl):
                     self.uploadPhotosSequentially(
-                        self.selectedPhotosData,
+                        self.attachmentSelection.selectedPhotosData,
                         uploadURL: uploadUrl
                     ) { result in
                         DispatchQueue.main.async {
                             switch result {
                             case .success(let attachments):
-                                let joinedAttachments = attachments.joined(separator: ",")
+                                let joinedAttachments = (attachments + self.attachmentSelection.selectedAttachments.map(\.id)).joined(separator: ",")
                                 self.createPost(attachments: joinedAttachments, onCreated: onCreated)
                             case .failure(let error):
                                 self.isSubmitting = false
@@ -103,7 +111,8 @@ final class NewPostViewModel: ObservableObject {
                 }
             }
         } else {
-            createPost(attachments: nil, onCreated: onCreated)
+            let attachments = attachmentSelection.selectedAttachments.map(\.id).joined(separator: ",")
+            createPost(attachments: attachments.isEmpty ? nil : attachments, onCreated: onCreated)
         }
     }
 
@@ -146,14 +155,45 @@ final class NewPostViewModel: ObservableObject {
     }
 
     private func createPost(attachments: String?, onCreated: @escaping (Post) -> Void) {
+        if let poll = attachmentSelection.pollDraft, savedPollAttachment == nil {
+            struct CreatedPoll: Decodable { let id: Int; let ownerId: Int }
+            do {
+                let answers = String(decoding: try JSONEncoder().encode(poll.answers), as: UTF8.self)
+                APIClient.shared.call(method: "polls.create", parameters: [
+                    "question": poll.question, "add_answers": answers,
+                    "is_anonymous": poll.anonymous ? "1" : "0",
+                    "is_multiple": poll.multiple ? "1" : "0"
+                ], httpMethod: "POST", as: CreatedPoll.self) { [weak self] result in
+                    DispatchQueue.main.async {
+                        guard let self = self else { return }
+                        switch result {
+                        case .success(let response):
+                            self.savedPollAttachment = "poll\(response.ownerId)_\(response.id)"
+                            self.createPost(attachments: attachments, onCreated: onCreated)
+                        case .failure(let error):
+                            self.isSubmitting = false
+                            self.errorMessage = error.localizedDescription
+                            self.showErrorAlert = true
+                        }
+                    }
+                }
+            } catch {
+                isSubmitting = false
+                errorMessage = error.localizedDescription
+                showErrorAlert = true
+            }
+            return
+        }
+        let attachmentIDs = [attachments, savedPollAttachment].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ",")
         service.createPost(
             text: text,
             ownerID: ownerID,
-            attachments: attachments,
+            attachments: attachmentIDs.isEmpty ? nil : attachmentIDs,
             explicit: isExplicit,
             fromGroup: isGroup ? fromGroup : false,
             signed: (isGroup && fromGroup) ? signed : false,
-            targetUser: targetUser
+            targetUser: targetUser,
+            metadata: PostPublicationMetadata(sourceURL: attachmentSelection.sourceURL, latitude: attachmentSelection.selectedPlace?.latitude, longitude: attachmentSelection.selectedPlace?.longitude, placeName: attachmentSelection.selectedPlace?.name ?? "")
         ) { [weak self] result in
             guard let self = self else { return }
             DispatchQueue.main.async {

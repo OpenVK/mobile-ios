@@ -6,6 +6,8 @@
 //
 
 import XCTest
+import SwiftUI
+import Combine
 @testable import OpenVK
 
 class OpenVKTests: XCTestCase {
@@ -181,5 +183,88 @@ class OpenVKTests: XCTestCase {
     func testPerformanceExample() throws {
         self.measure {
         }
+    }
+}
+
+private final class ComposerFeedServiceStub: FeedServiceProtocol {
+    var attachmentIDs: String?
+    var metadata: PostPublicationMetadata?
+    var didCreatePost = false
+
+    func createPost(text: String, ownerID: Int?, attachments: String?, explicit: Bool, fromGroup: Bool, signed: Bool, targetUser: User?, metadata: PostPublicationMetadata?, completion: @escaping (Result<Post, Error>) -> Void) {
+        didCreatePost = true
+        attachmentIDs = attachments
+        self.metadata = metadata
+    }
+    func fetchFeed(isGlobal: Bool, startFrom: String?, completion: @escaping (Result<(posts: [Post], nextFrom: String?), Error>) -> Void) { XCTFail("Unexpected feed request") }
+    func getPostById(ownerID: Int, postID: Int, completion: @escaping (Result<Post, Error>) -> Void) { XCTFail("Unexpected post request") }
+    func like(post: Post, completion: @escaping (Result<Post, Error>) -> Void) { XCTFail("Unexpected like request") }
+    func uploadPhoto(photoData: Data, ownerID: Int?, completion: @escaping (Result<String, Error>) -> Void) { XCTFail("Unexpected photo upload") }
+    func getWallUploadServer(ownerID: Int?, completion: @escaping (Result<String, Error>) -> Void) { XCTFail("Unexpected upload server request") }
+    func uploadPhotoToServer(urlString: String, photoData: Data, ownerID: Int?, completion: @escaping (Result<String, Error>) -> Void) { XCTFail("Unexpected photo upload") }
+}
+
+extension OpenVKTests {
+    func testAttachmentPickerSelectionsHaveIndependentLimits() {
+        var first = AttachmentPickerSelection(maximumAttachments: 1)
+        first.selectedAttachments.append(PickerAttachment(id: "doc2_1", title: "Файл", icon: "doc"))
+        let second = AttachmentPickerSelection(maximumAttachments: 3)
+
+        XCTAssertEqual(first.remainingAttachmentSlots, 0)
+        XCTAssertEqual(second.remainingAttachmentSlots, 3)
+        XCTAssertFalse(second.hasAttachments)
+    }
+
+    func testAttachmentPickerBindingUpdatesComposerAndNotifiesObservers() {
+        let model = NewPostViewModel(service: ComposerFeedServiceStub())
+        var updates = 0
+        let subscription = model.objectWillChange.sink { updates += 1 }
+        let selection = Binding(get: { model.attachmentSelection }, set: { model.attachmentSelection = $0 })
+
+        selection.wrappedValue.selectedPhotosData.append(Data([1]))
+
+        XCTAssertGreaterThan(updates, 0)
+        XCTAssertTrue(model.canPublish)
+        XCTAssertEqual(model.attachmentSelection.attachmentCount, 1)
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testComposerPublishesLibraryAttachmentsWithSourceAndPlace() {
+        let service = ComposerFeedServiceStub()
+        let model = NewPostViewModel(service: service)
+        model.attachmentSelection.selectedAttachments = [
+            PickerAttachment(id: "video2_7", title: "Видео", icon: "video"),
+            PickerAttachment(id: "doc2_8", title: "Документ", icon: "doc")
+        ]
+        model.attachmentSelection.sourceURL = "https://example.com/source"
+        model.attachmentSelection.selectedPlace = AttachmentPlace(name: "Москва", latitude: 55.75, longitude: 37.61)
+
+        XCTAssertTrue(model.canPublish)
+        model.publish { _ in XCTFail("Stub does not complete publication") }
+
+        XCTAssertEqual(service.attachmentIDs, "video2_7,doc2_8")
+        XCTAssertEqual(service.metadata?.sourceURL, "https://example.com/source")
+        XCTAssertEqual(service.metadata?.latitude, 55.75)
+        XCTAssertEqual(service.metadata?.longitude, 37.61)
+        XCTAssertEqual(service.metadata?.placeName, "Москва")
+        XCTAssertFalse(model.canPublish)
+    }
+
+    func testComposerRequiresPostContentAndCountsPollTowardAttachmentLimit() {
+        let service = ComposerFeedServiceStub()
+        let model = NewPostViewModel(service: service)
+        model.text = " \n "
+        model.attachmentSelection.sourceURL = "https://example.com"
+        model.attachmentSelection.selectedPlace = AttachmentPlace(name: "Москва", latitude: 55.75, longitude: 37.61)
+        XCTAssertTrue(model.attachmentSelection.hasAttachments)
+        XCTAssertFalse(model.canPublish)
+        model.publish { _ in XCTFail("Empty post must not publish") }
+        XCTAssertFalse(service.didCreatePost)
+
+        model.attachmentSelection.selectedPhotosData = Array(repeating: Data([1]), count: 8)
+        model.attachmentSelection.pollDraft = AttachmentPollDraft(question: "Вопрос", answers: ["Да", "Нет"], anonymous: false, multiple: false)
+        XCTAssertEqual(model.attachmentSelection.remainingAttachmentSlots, 1)
+        model.attachmentSelection.selectedAttachments = [PickerAttachment(id: "note2_1", title: "Заметка", icon: "note.text")]
+        XCTAssertEqual(model.attachmentSelection.remainingAttachmentSlots, 0)
     }
 }

@@ -25,6 +25,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Камера нужна, чтобы сделать фотографию и прикрепить её к записи.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Приложению требуется доступ к фотогалерее для сохранения изображений.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
